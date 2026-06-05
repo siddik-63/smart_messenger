@@ -1,0 +1,6 @@
+{
+  "appId": "com.smart.messenger",
+  "appName": "Smart Messenger",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
