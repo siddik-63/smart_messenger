@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -13,8 +14,8 @@ const PORT = process.env.PORT || 3000;
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
-        user: 's6363603861@gmail.com',
-        pass: 'adlx edav xvea cbyw' // Provided App Password
+        user: process.env.EMAIL_USER || 's6363603861@gmail.com', // fallback for local if env is missing
+        pass: process.env.EMAIL_PASS
     }
 });
 
