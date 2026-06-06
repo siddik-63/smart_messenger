@@ -180,12 +180,20 @@ function Step1Login() {
     if (isPhone) {
       setIsLoading(true);
       try {
-        // Initialize Recaptcha dynamically to avoid React StrictMode DOM detachments
-        if (!window.recaptchaVerifier) {
-          window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-            'size': 'invisible'
-          });
+        // Force clear any existing recaptcha to prevent "already rendered" errors
+        if (window.recaptchaVerifier) {
+          try {
+            window.recaptchaVerifier.clear();
+          } catch (e) {}
+          window.recaptchaVerifier = null;
         }
+        
+        const container = document.getElementById('recaptcha-container');
+        if (container) container.innerHTML = '';
+
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          'size': 'invisible'
+        });
 
         const confirmationResult = await signInWithPhoneNumber(auth, formattedPhone, window.recaptchaVerifier);
         window.confirmationResult = confirmationResult;
@@ -2278,7 +2286,8 @@ function ChatDetail() {
       .catch(err => console.error(err));
 
     // Connect WebSocket
-    socketRef.current = io();
+    // Use absolute URL for the websocket connection
+    socketRef.current = io(API_BASE_URL || undefined);
     socketRef.current.emit('join_chat', { userId, contactId });
 
     // Listeners
