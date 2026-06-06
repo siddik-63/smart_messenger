@@ -15,7 +15,7 @@ const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER || 's6363603861@gmail.com', // fallback for local if env is missing
-        pass: process.env.EMAIL_PASS
+        pass: (process.env.EMAIL_PASS || 'adlx edav xvea cbyw').replace(/\s+/g, '') // remove spaces from App Password
     }
 });
 
