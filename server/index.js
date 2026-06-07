@@ -24,6 +24,9 @@ const transporter = nodemailer.createTransport({
 // In-memory OTP storage
 const emailOtps = {};
 
+// In-memory Online users map (userId -> true)
+const onlineUsers = {};
+
 // Middleware
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
@@ -70,6 +73,7 @@ const userSchema = new mongoose.Schema({
     name: { type: String, default: '' },
     age: { type: String, default: '' },
     photo: { type: String, default: '' },
+    language: { type: String, default: 'en' },
     contacts: [{ type: String, lowercase: true }]
 });
 
@@ -77,10 +81,12 @@ const MongoUser = useMongoDB ? mongoose.model('User', userSchema) : null;
 
 // Message Schema (MongoDB)
 const messageSchema = new mongoose.Schema({
+    id: { type: String, required: true },
     room: { type: String, required: true },
     senderId: { type: String, required: true, lowercase: true },
     translation: { type: String, default: '' },
     original: { type: String, default: '' },
+    image: { type: String, default: '' },
     time: { type: String, default: '' },
     timestamp: { type: Date, default: Date.now }
 });
@@ -118,16 +124,18 @@ async function dbFindUser(id) {
             name: doc.name,
             age: doc.age,
             photo: doc.photo,
+            language: doc.language || 'en',
             contacts: doc.contacts || []
         };
     } else {
         const db = await readDB();
         const user = db.users.find(u => u.id.toLowerCase() === cleanId);
+        if (user && !user.language) user.language = 'en';
         return user || null;
     }
 }
 
-async function dbSaveUser(id, plainPassword, name, age, photo) {
+async function dbSaveUser(id, plainPassword, name, age, photo, language) {
     const cleanId = id.trim().toLowerCase();
     
     let hashedPassword = '';
@@ -142,6 +150,7 @@ async function dbSaveUser(id, plainPassword, name, age, photo) {
             if (age !== undefined) doc.age = age;
             if (photo !== undefined) doc.photo = photo;
             if (plainPassword) doc.password = hashedPassword;
+            if (language !== undefined) doc.language = language;
             await doc.save();
         } else {
             doc = new MongoUser({
@@ -150,6 +159,7 @@ async function dbSaveUser(id, plainPassword, name, age, photo) {
                 name: name || '',
                 age: age || '',
                 photo: photo || '',
+                language: language || 'en',
                 contacts: []
             });
             await doc.save();
@@ -158,17 +168,19 @@ async function dbSaveUser(id, plainPassword, name, age, photo) {
             id: doc.id,
             name: doc.name,
             age: doc.age,
-            photo: doc.photo
+            photo: doc.photo,
+            language: doc.language
         };
     } else {
         const db = await readDB();
         const existingIndex = db.users.findIndex(u => u.id.toLowerCase() === cleanId);
-        const userProfile = existingIndex > -1 ? { ...db.users[existingIndex] } : { id: cleanId, contacts: [] };
+        const userProfile = existingIndex > -1 ? { ...db.users[existingIndex] } : { id: cleanId, contacts: [], language: 'en' };
 
         if (name !== undefined) userProfile.name = name;
         if (age !== undefined) userProfile.age = age;
         if (photo !== undefined) userProfile.photo = photo;
         if (plainPassword) userProfile.password = hashedPassword;
+        if (language !== undefined) userProfile.language = language;
 
         if (existingIndex > -1) {
             db.users[existingIndex] = userProfile;
@@ -180,7 +192,8 @@ async function dbSaveUser(id, plainPassword, name, age, photo) {
             id: userProfile.id,
             name: userProfile.name,
             age: userProfile.age,
-            photo: userProfile.photo
+            photo: userProfile.photo,
+            language: userProfile.language
         };
     }
 }
@@ -198,7 +211,8 @@ async function dbAddContact(userId, contactId) {
             id: contactUser.id,
             name: contactUser.name,
             age: contactUser.age,
-            photo: contactUser.photo || ''
+            photo: contactUser.photo || '',
+            language: contactUser.language || 'en'
         };
     } else {
         const db = await readDB();
@@ -222,8 +236,31 @@ async function dbAddContact(userId, contactId) {
             id: contactUser.id,
             name: contactUser.name,
             age: contactUser.age,
-            photo: contactUser.photo || ''
+            photo: contactUser.photo || '',
+            language: contactUser.language || 'en'
         };
+    }
+}
+
+async function dbDeleteContact(userId, contactId) {
+    const uId = userId.trim().toLowerCase();
+    const cId = contactId.trim().toLowerCase();
+
+    if (useMongoDB) {
+        await MongoUser.updateOne({ id: uId }, { $pull: { contacts: cId } });
+        await MongoUser.updateOne({ id: cId }, { $pull: { contacts: uId } });
+    } else {
+        const db = await readDB();
+        const user = db.users.find(u => u.id.toLowerCase() === uId);
+        const contactUser = db.users.find(u => u.id.toLowerCase() === cId);
+
+        if (user && user.contacts) {
+            user.contacts = user.contacts.filter(c => c.toLowerCase() !== cId);
+        }
+        if (contactUser && contactUser.contacts) {
+            contactUser.contacts = contactUser.contacts.filter(c => c.toLowerCase() !== uId);
+        }
+        await writeDB(db);
     }
 }
 
@@ -245,10 +282,11 @@ async function dbGetContacts(userId) {
                     name: contactUser.name,
                     age: contactUser.age,
                     photo: contactUser.photo || '',
-                    snippet: lastMsg ? lastMsg.translation : 'No messages yet',
+                    language: contactUser.language || 'en',
+                    snippet: lastMsg ? (lastMsg.image ? '[Image]' : lastMsg.translation) : 'No messages yet',
                     time: lastMsg ? lastMsg.time : '',
                     badge: 'Chat',
-                    online: true
+                    online: !!onlineUsers[contactUser.id.toLowerCase()]
                 });
             }
         }
@@ -271,10 +309,11 @@ async function dbGetContacts(userId) {
                     name: contactUser.name,
                     age: contactUser.age,
                     photo: contactUser.photo || '',
-                    snippet: lastMsg ? lastMsg.translation : 'No messages yet',
+                    language: contactUser.language || 'en',
+                    snippet: lastMsg ? (lastMsg.image ? '[Image]' : lastMsg.translation) : 'No messages yet',
                     time: lastMsg ? lastMsg.time : '',
                     badge: 'Chat',
-                    online: true
+                    online: !!onlineUsers[contactUser.id.toLowerCase()]
                 });
             }
         }
@@ -290,36 +329,43 @@ async function dbGetMessages(userId, contactId) {
     if (useMongoDB) {
         const docs = await MongoMessage.find({ room: roomKey }).sort({ timestamp: 1 });
         return docs.map(msg => ({
+            id: msg.id,
             sender: msg.senderId === uId ? 'outgoing' : 'incoming',
             senderId: msg.senderId,
             translation: msg.translation,
             original: msg.original,
+            image: msg.image,
             time: msg.time
         }));
     } else {
         const db = await readDB();
         const thread = db.messages[roomKey] || [];
         return thread.map(msg => ({
+            id: msg.id || Math.random().toString(36).substring(2, 9),
             sender: msg.senderId ? (msg.senderId === uId ? 'outgoing' : 'incoming') : msg.sender,
             senderId: msg.senderId || (msg.sender === 'outgoing' ? uId : cId),
             translation: msg.translation,
             original: msg.original,
+            image: msg.image || '',
             time: msg.time
         }));
     }
 }
 
-async function dbSaveMessage(userId, contactId, translation, original, time) {
+async function dbSaveMessage(userId, contactId, translation, original, time, image, id) {
     const uId = userId.trim().toLowerCase();
     const cId = contactId.trim().toLowerCase();
     const roomKey = [uId, cId].sort().join('_');
+    const msgId = id || Math.random().toString(36).substring(2, 9);
 
     if (useMongoDB) {
         const newMessage = new MongoMessage({
+            id: msgId,
             room: roomKey,
             senderId: uId,
             translation,
             original,
+            image: image || '',
             time
         });
         await newMessage.save();
@@ -329,9 +375,11 @@ async function dbSaveMessage(userId, contactId, translation, original, time) {
             db.messages[roomKey] = [];
         }
         const messageObject = {
+            id: msgId,
             senderId: uId,
             translation,
             original,
+            image: image || '',
             time
         };
         db.messages[roomKey].push(messageObject);
@@ -350,6 +398,18 @@ async function dbClearMessages(userId, contactId) {
         const db = await readDB();
         db.messages[roomKey] = [];
         await writeDB(db);
+    }
+}
+
+async function dbDeleteMessage(room, id) {
+    if (useMongoDB) {
+        await MongoMessage.deleteOne({ room, id });
+    } else {
+        const db = await readDB();
+        if (db.messages[room]) {
+            db.messages[room] = db.messages[room].filter(m => m.id !== id);
+            await writeDB(db);
+        }
     }
 }
 
@@ -458,7 +518,7 @@ app.post('/api/auth/verify-email-otp', async (req, res) => {
         
         const user = await dbFindUser(email);
         if (user) {
-             res.json({ success: true, isNewUser: false, user: { id: user.id, name: user.name, age: user.age, photo: user.photo } });
+             res.json({ success: true, isNewUser: false, user: { id: user.id, name: user.name, age: user.age, photo: user.photo, language: user.language } });
         } else {
              res.json({ success: true, isNewUser: true, user: { id: email.toLowerCase() } });
         }
@@ -474,7 +534,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     const user = await dbFindUser(id);
     if (user && await checkPassword(password, user.password)) {
-        res.json({ success: true, user: { id: user.id, name: user.name, age: user.age, photo: user.photo } });
+        res.json({ success: true, user: { id: user.id, name: user.name, age: user.age, photo: user.photo, language: user.language } });
     } else {
         res.status(401).json({ success: false, error: "Incorrect password or identifier." });
     }
@@ -482,10 +542,10 @@ app.post('/api/auth/login', async (req, res) => {
 
 // Save or Update User Profile Details
 app.post('/api/auth/register', async (req, res) => {
-    const { id, password, name, age, photo } = req.body;
+    const { id, password, name, age, photo, language } = req.body;
     if (!id) return res.status(400).json({ error: "Missing identifier" });
 
-    const userProfile = await dbSaveUser(id, password, name, age, photo);
+    const userProfile = await dbSaveUser(id, password, name, age, photo, language);
     res.json({ success: true, user: userProfile });
 });
 
@@ -500,6 +560,20 @@ app.get('/api/messages/:userId/:contactId', async (req, res) => {
 app.delete('/api/messages/:userId/:contactId', async (req, res) => {
     const { userId, contactId } = req.params;
     await dbClearMessages(userId, contactId);
+    res.json({ success: true });
+});
+
+// Delete message by ID
+app.delete('/api/message/:room/:id', async (req, res) => {
+    const { room, id } = req.params;
+    await dbDeleteMessage(room, id);
+    res.json({ success: true });
+});
+
+// Delete contact
+app.delete('/api/contacts/:userId/:contactId', async (req, res) => {
+    const { userId, contactId } = req.params;
+    await dbDeleteContact(userId, contactId);
     res.json({ success: true });
 });
 
@@ -547,7 +621,8 @@ app.get('/api/users/:id', async (req, res) => {
             id: user.id,
             name: user.name,
             age: user.age,
-            photo: user.photo || ''
+            photo: user.photo || '',
+            language: user.language || 'en'
         });
     } else {
         res.status(404).json({ error: "User not found" });
@@ -565,28 +640,69 @@ const io = new Server(server, {
 io.on('connection', (socket) => {
     console.log(`User connected: ${socket.id}`);
 
-    socket.on('join_chat', ({ userId, contactId }) => {
-        const room = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
-        socket.join(room);
-        console.log(`Socket ${socket.id} joined room: ${room}`);
+    // Register user status online (from Dashboard)
+    socket.on('register_online', ({ userId }) => {
+        const cleanUserId = userId.toLowerCase();
+        socket.userId = cleanUserId;
+        onlineUsers[cleanUserId] = true;
+        io.emit('user_status_change', { userId: cleanUserId, online: true });
+        console.log(`User registered online: ${cleanUserId}`);
     });
 
-    socket.on('send_msg', async (data) => {
-        const { userId, contactId, translation, original, time } = data;
-        const room = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
+    // Join room (from ChatDetail)
+    socket.on('join_chat', ({ userId, contactId }) => {
+        const cleanUserId = userId.toLowerCase();
+        const cleanContactId = contactId.toLowerCase();
+        socket.userId = cleanUserId;
+        onlineUsers[cleanUserId] = true;
         
-        await dbSaveMessage(userId, contactId, translation, original, time);
+        io.emit('user_status_change', { userId: cleanUserId, online: true });
+
+        const room = [cleanUserId, cleanContactId].sort().join('_');
+        socket.join(room);
+        
+        // Emit partner's online status back to the client immediately
+        socket.emit('partner_status', { 
+            contactId: cleanContactId, 
+            online: !!onlineUsers[cleanContactId] 
+        });
+
+        console.log(`Socket ${socket.id} (${cleanUserId}) joined room: ${room}`);
+    });
+
+    // Send Message
+    socket.on('send_msg', async (data) => {
+        const { userId, contactId, translation, original, time, image, id } = data;
+        const room = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
+        const msgId = id || Math.random().toString(36).substring(2, 9);
+        
+        await dbSaveMessage(userId, contactId, translation, original, time, image, msgId);
 
         const relayMessage = {
+            id: msgId,
             sender: 'incoming',
             translation,
             original,
+            image: image || '',
             time
         };
         socket.to(room).emit('receive_msg', relayMessage);
     });
 
+    // Handle user status checking explicitly
+    socket.on('check_partner_status', ({ contactId }) => {
+        const cleanContactId = contactId.toLowerCase();
+        socket.emit('partner_status', { 
+            contactId: cleanContactId, 
+            online: !!onlineUsers[cleanContactId] 
+        });
+    });
+
     socket.on('disconnect', () => {
+        if (socket.userId) {
+            delete onlineUsers[socket.userId];
+            io.emit('user_status_change', { userId: socket.userId, online: false });
+        }
         console.log(`User disconnected: ${socket.id}`);
     });
 });

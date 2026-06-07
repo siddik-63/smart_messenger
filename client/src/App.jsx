@@ -1243,16 +1243,21 @@ function Step6Language() {
   }, [identifier]);
 
   const handleComplete = () => {
-    if (uiLang !== 'en' && uiLang !== localStorage.getItem('settings_ui_lang')) {
-      localStorage.setItem('settings_ui_lang', uiLang);
-      document.cookie = `googtrans=/en/${uiLang}; path=/; domain=${window.location.hostname}`;
-      document.cookie = `googtrans=/en/${uiLang}; path=/;`;
+    localStorage.setItem('settings_ui_lang', uiLang);
+    document.cookie = `googtrans=/en/${uiLang}; path=/; domain=${window.location.hostname}`;
+    document.cookie = `googtrans=/en/${uiLang}; path=/;`;
+    
+    // Save language selection to backend database profile
+    const identifier = localStorage.getItem('onboarding_id');
+    fetch(API_BASE_URL + '/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: identifier, language: uiLang })
+    })
+    .finally(() => {
       navigate('/success');
       setTimeout(() => window.location.reload(), 100);
-    } else {
-      localStorage.setItem('settings_ui_lang', uiLang);
-      navigate('/success');
-    }
+    });
   };
 
   return (
@@ -1597,12 +1602,25 @@ function Dashboard() {
         password: localStorage.getItem('onboarding_password') || 'Password123!', 
         name: editName.trim(), 
         age: editAge.trim(), 
-        photo: editPhoto 
+        photo: editPhoto,
+        language: currentUiLang
       })
     }).catch(err => console.error('Failed to update profile on server', err));
 
     setIsEditingProfile(false);
     globalShowToast('Profile Updated', 'Your profile has been saved successfully.', 'normal');
+  };
+
+  const handleDeleteContact = (e, contactId) => {
+    e.stopPropagation();
+    if (confirm(`Remove this contact from your chat list?`)) {
+      fetch(API_BASE_URL + `/api/contacts/${userId}/${contactId}`, { method: 'DELETE' })
+        .then(() => {
+          setContacts(prev => prev.filter(c => c.id !== contactId));
+          globalShowToast("Delete Contact", "Contact removed successfully.", "normal");
+        })
+        .catch(err => console.error(err));
+    }
   };
 
   useEffect(() => {
@@ -1619,6 +1637,23 @@ function Dashboard() {
         }
       })
       .catch(err => console.error("Error fetching contacts:", err));
+
+    // Connect socket for real-time online status updates
+    const socket = io(API_BASE_URL || undefined);
+    socket.emit('register_online', { userId });
+
+    socket.on('user_status_change', ({ userId: changedId, online }) => {
+      setContacts(prev => prev.map(c => {
+        if (c.id.toLowerCase() === changedId.toLowerCase()) {
+          return { ...c, online };
+        }
+        return c;
+      }));
+    });
+
+    return () => {
+      socket.disconnect();
+    };
   }, [userId]);
 
   const filtered = contacts.filter(c =>
@@ -1753,12 +1788,21 @@ function Dashboard() {
                 ) : (
                   <i className="fa-solid fa-user thread-avatar-fallback"></i>
                 )}
-                <span className="thread-status-dot online"></span>
+                <span className={`thread-status-dot ${c.online ? 'online' : 'offline'}`}></span>
               </div>
               <div class="thread-body">
                 <div class="thread-title-row">
                   <span class="thread-name">{c.name || c.id}</span>
-                  <span class="thread-time">{c.time}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span class="thread-time">{c.time}</span>
+                    <button 
+                      onClick={(e) => handleDeleteContact(e, c.id)} 
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', outline: 'none', padding: '0.2rem', display: 'flex', alignItems: 'center' }} 
+                      title="Delete Contact"
+                    >
+                      <i class="fa-regular fa-trash-can" style={{ fontSize: '0.85rem' }}></i>
+                    </button>
+                  </div>
                 </div>
                 <div class="thread-msg-row">
                   <span class="thread-snippet">{c.snippet}</span>
@@ -2159,8 +2203,76 @@ function ChatDetail() {
   const scrollRef = useRef(null);
   const translationTimeoutRef = useRef(null);
 
-  const [userLang, setUserLang] = useState('en');
-  const [partnerLang, setPartnerLang] = useState('es');
+  const [userLang, setUserLang] = useState(localStorage.getItem('settings_ui_lang') || 'en');
+  const [partnerLang, setPartnerLang] = useState('en');
+  const [isPartnerOnline, setIsPartnerOnline] = useState(false);
+  const imageInputRef = useRef(null);
+
+  const handleUserLangChange = (newLang) => {
+    setUserLang(newLang);
+    localStorage.setItem('settings_ui_lang', newLang);
+    document.cookie = `googtrans=/en/${newLang}; path=/; domain=${window.location.hostname}`;
+    document.cookie = `googtrans=/en/${newLang}; path=/;`;
+    
+    fetch(API_BASE_URL + '/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: userId, language: newLang })
+    }).catch(err => console.error("Failed to update language on server:", err));
+  };
+
+  const handleSendImage = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    if (file.size > 2 * 1024 * 1024) {
+      globalShowToast("Error", "Image is too large. Please select an image under 2MB.", "normal");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64String = reader.result;
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const msgId = Math.random().toString(36).substring(2, 9);
+      const msgPayload = {
+        id: msgId,
+        userId,
+        contactId,
+        translation: '[Image Shared]',
+        original: '[Image Shared]',
+        image: base64String,
+        time: timeStr
+      };
+      
+      socketRef.current.emit('send_msg', msgPayload);
+      
+      setMessages(prev => [...prev, {
+        id: msgId,
+        sender: 'outgoing',
+        translation: '[Image Shared]',
+        original: '[Image Shared]',
+        image: base64String,
+        time: timeStr
+      }]);
+      
+      setTimeout(scrollToBottom, 50);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDeleteMessage = (msgId) => {
+    if (!msgId) return;
+    if (confirm("Delete this message?")) {
+      const room = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
+      fetch(API_BASE_URL + `/api/message/${room}/${msgId}`, { method: 'DELETE' })
+        .then(() => {
+          setMessages(prev => prev.filter(m => m.id !== msgId));
+        })
+        .catch(err => console.error(err));
+    }
+  };
 
   const toggleVoiceListening = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -2178,7 +2290,23 @@ function ChatDetail() {
     }
 
     const rec = new SpeechRecognition();
-    rec.lang = userLang === 'ja' ? 'ja-JP' : userLang === 'es' ? 'es-ES' : userLang === 'fr' ? 'fr-FR' : userLang === 'de' ? 'de-DE' : 'en-US';
+    rec.lang = userLang === 'hi' ? 'hi-IN' :
+               userLang === 'bn' ? 'bn-IN' :
+               userLang === 'te' ? 'te-IN' :
+               userLang === 'ta' ? 'ta-IN' :
+               userLang === 'mr' ? 'mr-IN' :
+               userLang === 'gu' ? 'gu-IN' :
+               userLang === 'kn' ? 'kn-IN' :
+               userLang === 'ml' ? 'ml-IN' :
+               userLang === 'ur' ? 'ur-IN' :
+               userLang === 'pa' ? 'pa-IN' :
+               userLang === 'ja' ? 'ja-JP' :
+               userLang === 'es' ? 'es-ES' :
+               userLang === 'fr' ? 'fr-FR' :
+               userLang === 'de' ? 'de-DE' :
+               userLang === 'zh' ? 'zh-CN' :
+               userLang === 'ru' ? 'ru-RU' :
+               userLang === 'ko' ? 'ko-KR' : 'en-US';
     rec.continuous = false;
     rec.interimResults = false;
 
@@ -2214,11 +2342,13 @@ function ChatDetail() {
       .then(res => res.json())
       .then(data => {
         setContactUser(data);
+        if (data.language) {
+          setPartnerLang(data.language);
+        }
       })
       .catch(err => {
         console.error("Error fetching contact details:", err);
-        // Fallback info
-        setContactUser({ id: contactId, name: contactId, photo: '' });
+        setContactUser({ id: contactId, name: contactId, photo: '', language: 'en' });
       });
   }, [contactId]);
 
@@ -2239,7 +2369,6 @@ function ChatDetail() {
       .catch(err => console.error(err));
 
     // Connect WebSocket
-    // Use absolute URL for the websocket connection
     socketRef.current = io(API_BASE_URL || undefined);
     socketRef.current.emit('join_chat', { userId, contactId });
 
@@ -2247,6 +2376,18 @@ function ChatDetail() {
     socketRef.current.on('receive_msg', (msg) => {
       setMessages(prev => [...prev, msg]);
       setTimeout(scrollToBottom, 50);
+    });
+
+    socketRef.current.on('partner_status', ({ contactId: cId, online }) => {
+      if (cId.toLowerCase() === contactId.toLowerCase()) {
+        setIsPartnerOnline(online);
+      }
+    });
+
+    socketRef.current.on('user_status_change', ({ userId: changedId, online }) => {
+      if (changedId.toLowerCase() === contactId.toLowerCase()) {
+        setIsPartnerOnline(online);
+      }
     });
 
     return () => {
@@ -2327,7 +2468,9 @@ function ChatDetail() {
     const now = new Date();
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+    const msgId = Math.random().toString(36).substring(2, 9);
     const msgPayload = {
+      id: msgId,
       userId,
       contactId,
       translation: finalTranslation,
@@ -2340,6 +2483,7 @@ function ChatDetail() {
 
     // Add locally to state immediately
     setMessages(prev => [...prev, {
+      id: msgId,
       sender: 'outgoing',
       translation: finalTranslation,
       original: textClean,
@@ -2374,31 +2518,27 @@ function ChatDetail() {
             ) : (
               <i className="fa-solid fa-user" id="partner-avatar-fallback"></i>
             )}
-            <span className="partner-status-dot online"></span>
+            <span className={`partner-status-dot ${isPartnerOnline ? 'online' : 'offline'}`}></span>
           </div>
           <div class="chat-partner-info">
             <h2 class="chat-partner-name">{contactUser ? contactUser.name : contactId}</h2>
-            <span className="chat-partner-status">Online</span>
+            <span className="chat-partner-status">{isPartnerOnline ? 'Online' : 'Offline'}</span>
           </div>
         </div>
 
         {/* Translation Pill */}
         <div class="chat-header-center">
-          <div class="lang-selector-pill">
-            <select value={userLang} onChange={(e) => setUserLang(e.target.value)} title="Your Language">
-              <option value="en">English</option>
-              <option value="es">Spanish</option>
-              <option value="ja">Japanese</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
-            </select>
-            <i class="fa-solid fa-right-left lang-arrow-icon"></i>
-            <select value={partnerLang} onChange={(e) => setPartnerLang(e.target.value)} title="Partner Language">
-              <option value="es">Spanish</option>
-              <option value="en">English</option>
-              <option value="ja">Japanese</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
+          <div class="lang-selector-pill" style={{ padding: '0.35rem 0.75rem' }}>
+            <i class="fa-solid fa-language lang-arrow-icon" style={{ fontSize: '0.9rem', marginRight: '0.2rem' }}></i>
+            <select 
+              value={userLang} 
+              onChange={(e) => handleUserLangChange(e.target.value)} 
+              title="My Language"
+              style={{ fontSize: '0.85rem' }}
+            >
+              {TRANSLATION_LANGUAGES.map(l => (
+                <option key={l.code} value={l.code}>{l.name}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -2414,7 +2554,7 @@ function ChatDetail() {
       {dropdownOpen && (
         <div class="options-dropdown-menu" id="chat-options-dropdown">
           <button class="btn-dropdown-item" onClick={handleClearChat}><i class="fa-regular fa-trash-can"></i> Clear Chat History</button>
-          <button class="btn-dropdown-item" onClick={() => { setUserLang('en'); setPartnerLang('es'); }}><i class="fa-solid fa-arrows-rotate"></i> Reset Languages</button>
+          <button class="btn-dropdown-item" onClick={() => { setUserLang(localStorage.getItem('settings_ui_lang') || 'en'); setPartnerLang(contactUser?.language || 'en'); }}><i class="fa-solid fa-arrows-rotate"></i> Reset Languages</button>
         </div>
       )}
 
@@ -2426,13 +2566,32 @@ function ChatDetail() {
             <span>Messages are translated in real-time. Typing translations will appear as a preview balloon above the input.</span>
           </div>
 
-          {messages.map((m, idx) => (
-            <div key={idx} class={`message-bubble ${m.sender}`}>
-              <span class="msg-translation-text">{m.translation}</span>
-              <span class="msg-original-text">{m.original}</span>
-              <div class="msg-bubble-footer">
-                <span class="msg-time">{m.time}</span>
-                {m.sender === 'outgoing' && <i class="fa-solid fa-check msg-status read"></i>}
+          {messages.map((m) => (
+            <div key={m.id || Math.random()} class={`message-bubble ${m.sender}`} style={{ position: 'relative' }}>
+              {m.image ? (
+                <img 
+                  src={m.image} 
+                  alt="Shared" 
+                  style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px', marginBottom: '0.4rem', display: 'block', objectFit: 'contain' }} 
+                />
+              ) : (
+                <>
+                  <span class="msg-translation-text">{m.translation}</span>
+                  <span class="msg-original-text">{m.original}</span>
+                </>
+              )}
+              <div class="msg-bubble-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: '0.5rem' }}>
+                <button 
+                  onClick={() => handleDeleteMessage(m.id)} 
+                  style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.35)', cursor: 'pointer', outline: 'none', padding: '0.15rem', display: 'flex', alignItems: 'center' }} 
+                  title="Delete message"
+                >
+                  <i class="fa-regular fa-trash-can" style={{ fontSize: '0.75rem' }}></i>
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                  <span class="msg-time">{m.time}</span>
+                  {m.sender === 'outgoing' && <i class="fa-solid fa-check msg-status read"></i>}
+                </div>
               </div>
             </div>
           ))}
@@ -2451,7 +2610,14 @@ function ChatDetail() {
 
         <form onSubmit={handleSend} class="chat-input-controls">
           <div class="input-actions-left">
-            <button type="button" class="btn-input-action" onClick={() => globalShowToast("Attachments", "Image sharing coming soon!", "normal")}>
+            <input 
+              type="file" 
+              ref={imageInputRef} 
+              style={{ display: 'none' }} 
+              accept="image/*" 
+              onChange={handleSendImage} 
+            />
+            <button type="button" class="btn-input-action" onClick={() => imageInputRef.current.click()}>
               <i class="fa-solid fa-plus"></i>
             </button>
           </div>
