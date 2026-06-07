@@ -46,6 +46,9 @@ export default function App() {
 
   useEffect(() => {
     globalShowToast = showToast;
+    // Set root document language for keyboard/OS localization
+    const savedLang = localStorage.getItem('settings_ui_lang') || 'en';
+    document.documentElement.lang = savedLang;
   }, []);
 
   return (
@@ -2082,6 +2085,7 @@ function Dashboard() {
                       value={transInput}
                       onChange={(e) => setTransInput(e.target.value)}
                       style={{ flex: 1, width: '100%', background: 'transparent', border: 'none', padding: '1rem', color: 'var(--text-main)', fontFamily: 'inherit', fontSize: '1.05rem', resize: 'none', outline: 'none', lineHeight: 1.5 }}
+                      lang={langFrom}
                     />
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 1rem', background: 'rgba(0,0,0,0.2)', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                       <button onClick={() => toggleVoicePhrasebook('from')} style={{ background: 'none', border: 'none', color: isListeningFrom ? 'var(--error-red)' : 'var(--primary-blue)', cursor: 'pointer', outline: 'none', fontSize: '1.25rem', padding: '0.25rem' }} title="Dictate Voice">
@@ -2107,6 +2111,7 @@ function Dashboard() {
                       value={transOutput}
                       onChange={(e) => setTransOutput(e.target.value)}
                       style={{ flex: 1, width: '100%', background: 'transparent', border: 'none', padding: '1rem', color: 'var(--text-main)', fontFamily: 'inherit', fontSize: '1.05rem', resize: 'none', outline: 'none', lineHeight: 1.5 }}
+                      lang={langTo}
                     />
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 1rem', background: 'rgba(0,0,0,0.2)', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                       <button onClick={() => toggleVoicePhrasebook('to')} style={{ background: 'none', border: 'none', color: isListeningTo ? 'var(--error-red)' : 'var(--primary-blue)', cursor: 'pointer', outline: 'none', fontSize: '1.25rem', padding: '0.25rem' }} title="Dictate Voice">
@@ -2458,6 +2463,7 @@ function ChatDetail() {
               onChange={(e) => setInputValue(e.target.value)}
               autocomplete="off"
               style={{ paddingRight: '2.5rem' }}
+              lang={userLang}
             />
             <button 
               type="button" 
