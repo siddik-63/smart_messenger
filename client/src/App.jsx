@@ -176,71 +176,19 @@ function Step1Login() {
       return;
     }
 
-    // Always enforce OTP Flow
-    if (isPhone) {
-      setIsLoading(true);
-      try {
-        // Force clear any existing recaptcha to prevent "already rendered" errors
-        if (window.recaptchaVerifier) {
-          try {
-            window.recaptchaVerifier.clear();
-          } catch (e) {}
-          window.recaptchaVerifier = null;
-        }
-        
-        const container = document.getElementById('recaptcha-container');
-        if (container) container.innerHTML = '';
+    // Bypass OTP Flow entirely per user request
+    localStorage.setItem('onboarding_is_new', userExists ? 'false' : 'true');
+    localStorage.setItem('onboarding_id', isPhone ? formattedPhone : idClean);
+    localStorage.setItem('onboarding_skip_password', 'false');
 
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-          'size': 'invisible'
-        });
-
-        const confirmationResult = await signInWithPhoneNumber(auth, formattedPhone, window.recaptchaVerifier);
-        window.confirmationResult = confirmationResult;
-        
-        localStorage.setItem('onboarding_is_new', userExists ? 'false' : 'true');
-        localStorage.setItem('onboarding_id', formattedPhone);
-        localStorage.setItem('onboarding_skip_password', 'false'); // Must do password
-        
-        globalShowToast('OTP Sent', `Real SMS sent to ${formattedPhone}`, 'otp');
-        setTimeout(() => navigate('/verify'), 1200);
-      } catch (error) {
-        console.error("SMS Error", error);
-        if (window.recaptchaVerifier) {
-            window.recaptchaVerifier.clear();
-            window.recaptchaVerifier = null;
-        }
-        globalShowToast('Error', error.message, 'normal');
-      } finally {
-        setIsLoading(false);
+    globalShowToast('Success', 'Proceeding...', 'normal');
+    setTimeout(() => {
+      if (userExists) {
+        navigate('/login-password'); // Existing user, enter password
+      } else {
+        navigate('/password'); // New user, create password
       }
-    } else if (isEmail) {
-      setIsLoading(true);
-      fetch(API_BASE_URL + '/api/auth/send-email-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: idClean })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          localStorage.setItem('onboarding_is_new', userExists ? 'false' : 'true');
-          localStorage.setItem('onboarding_id', idClean);
-          localStorage.setItem('onboarding_is_email_otp', 'true');
-          globalShowToast('OTP Sent', 'Check your email for the 6-digit verification code!', 'otp');
-          setTimeout(() => navigate('/verify'), 1200);
-        } else {
-          throw new Error(data.error || "Failed to send email OTP");
-        }
-      })
-      .catch(err => {
-        console.error("Email OTP Error", err);
-        globalShowToast('Error', err.message, 'normal');
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
-    }
+    }, 800);
   };
 
   const handleForgotPassword = (e) => {
