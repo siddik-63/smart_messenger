@@ -460,6 +460,11 @@ async function translateText(text, fromLang, toLang) {
 // REST API ROUTES
 // -----------------------------------------------------------------
 
+// Health Check / Ping Endpoint for Render
+app.get('/', (req, res) => {
+    res.json({ status: "healthy", service: "smart-messenger-backend" });
+});
+
 // Translate Endpoint
 app.post('/api/translate', async (req, res) => {
     const { text, fromLang, toLang } = req.body;
@@ -708,6 +713,6 @@ io.on('connection', (socket) => {
 });
 
 // Run HTTP Server
-server.listen(PORT, () => {
-    console.log(`Full-stack Server running on http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Full-stack Server running on http://0.0.0.0:${PORT}`);
 });
