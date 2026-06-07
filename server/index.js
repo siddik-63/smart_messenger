@@ -6,16 +6,18 @@ const cors = require('cors');
 const fs = require('fs').promises;
 const path = require('path');
 const nodemailer = require('nodemailer');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Email Transporter (Option B)
+// Email Transporter
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
-        user: process.env.EMAIL_USER || 's6363603861@gmail.com', // fallback for local if env is missing
-        pass: (process.env.EMAIL_PASS || 'adlx edav xvea cbyw').replace(/\s+/g, '') // remove spaces from App Password
+        user: process.env.EMAIL_USER || 's6363603861@gmail.com',
+        pass: (process.env.EMAIL_PASS || 'adlx edav xvea cbyw').replace(/\s+/g, '')
     }
 });
 
@@ -24,11 +26,11 @@ const emailOtps = {};
 
 // Middleware
 app.use(cors({ origin: '*' }));
-app.use(express.json({ limit: '50mb' })); // support large user profile photos
+app.use(express.json({ limit: '50mb' }));
 
 const dbPath = path.join(__dirname, 'db.json');
 
-// Helper to read database
+// Local file DB read/write helpers
 async function readDB() {
     try {
         const data = await fs.readFile(dbPath, 'utf8');
@@ -39,12 +41,315 @@ async function readDB() {
     }
 }
 
-// Helper to write database
 async function writeDB(db) {
     try {
         await fs.writeFile(dbPath, JSON.stringify(db, null, 2), 'utf8');
     } catch (err) {
         console.error("Error writing to db.json", err);
+    }
+}
+
+// -----------------------------------------------------------------
+// DATABASE CONNECTION SETUP (MongoDB with Local Fallback)
+// -----------------------------------------------------------------
+const useMongoDB = !!process.env.MONGODB_URI;
+
+if (useMongoDB) {
+    console.log("Connecting to MongoDB Atlas...");
+    mongoose.connect(process.env.MONGODB_URI)
+        .then(() => console.log("Connected to MongoDB Atlas successfully"))
+        .catch(err => console.error("MongoDB Connection Error:", err));
+} else {
+    console.log("Using local db.json database file");
+}
+
+// User Schema (MongoDB)
+const userSchema = new mongoose.Schema({
+    id: { type: String, required: true, unique: true, lowercase: true },
+    password: { type: String, required: true },
+    name: { type: String, default: '' },
+    age: { type: String, default: '' },
+    photo: { type: String, default: '' },
+    contacts: [{ type: String, lowercase: true }]
+});
+
+const MongoUser = useMongoDB ? mongoose.model('User', userSchema) : null;
+
+// Message Schema (MongoDB)
+const messageSchema = new mongoose.Schema({
+    room: { type: String, required: true },
+    senderId: { type: String, required: true, lowercase: true },
+    translation: { type: String, default: '' },
+    original: { type: String, default: '' },
+    time: { type: String, default: '' },
+    timestamp: { type: Date, default: Date.now }
+});
+
+const MongoMessage = useMongoDB ? mongoose.model('Message', messageSchema) : null;
+
+// -----------------------------------------------------------------
+// SECURE PASSWORD HASHING HELPERS
+// -----------------------------------------------------------------
+async function hashPassword(plainPassword) {
+    if (!plainPassword) return '';
+    return await bcrypt.hash(plainPassword, 10);
+}
+
+async function checkPassword(plainPassword, hashedPassword) {
+    if (!plainPassword || !hashedPassword) return false;
+    // Allow legacy plain-text passwords in db.json for easy migration
+    if (!hashedPassword.startsWith('$2a$') && !hashedPassword.startsWith('$2b$')) {
+        return plainPassword === hashedPassword;
+    }
+    return await bcrypt.compare(plainPassword, hashedPassword);
+}
+
+// -----------------------------------------------------------------
+// DUAL-DATABASE CRUD HELPERS
+// -----------------------------------------------------------------
+async function dbFindUser(id) {
+    const cleanId = id.trim().toLowerCase();
+    if (useMongoDB) {
+        const doc = await MongoUser.findOne({ id: cleanId });
+        if (!doc) return null;
+        return {
+            id: doc.id,
+            password: doc.password,
+            name: doc.name,
+            age: doc.age,
+            photo: doc.photo,
+            contacts: doc.contacts || []
+        };
+    } else {
+        const db = await readDB();
+        const user = db.users.find(u => u.id.toLowerCase() === cleanId);
+        return user || null;
+    }
+}
+
+async function dbSaveUser(id, plainPassword, name, age, photo) {
+    const cleanId = id.trim().toLowerCase();
+    
+    let hashedPassword = '';
+    if (plainPassword) {
+        hashedPassword = await hashPassword(plainPassword);
+    }
+
+    if (useMongoDB) {
+        let doc = await MongoUser.findOne({ id: cleanId });
+        if (doc) {
+            if (name !== undefined) doc.name = name;
+            if (age !== undefined) doc.age = age;
+            if (photo !== undefined) doc.photo = photo;
+            if (plainPassword) doc.password = hashedPassword;
+            await doc.save();
+        } else {
+            doc = new MongoUser({
+                id: cleanId,
+                password: hashedPassword,
+                name: name || '',
+                age: age || '',
+                photo: photo || '',
+                contacts: []
+            });
+            await doc.save();
+        }
+        return {
+            id: doc.id,
+            name: doc.name,
+            age: doc.age,
+            photo: doc.photo
+        };
+    } else {
+        const db = await readDB();
+        const existingIndex = db.users.findIndex(u => u.id.toLowerCase() === cleanId);
+        const userProfile = existingIndex > -1 ? { ...db.users[existingIndex] } : { id: cleanId, contacts: [] };
+
+        if (name !== undefined) userProfile.name = name;
+        if (age !== undefined) userProfile.age = age;
+        if (photo !== undefined) userProfile.photo = photo;
+        if (plainPassword) userProfile.password = hashedPassword;
+
+        if (existingIndex > -1) {
+            db.users[existingIndex] = userProfile;
+        } else {
+            db.users.push(userProfile);
+        }
+        await writeDB(db);
+        return {
+            id: userProfile.id,
+            name: userProfile.name,
+            age: userProfile.age,
+            photo: userProfile.photo
+        };
+    }
+}
+
+async function dbAddContact(userId, contactId) {
+    const uId = userId.trim().toLowerCase();
+    const cId = contactId.trim().toLowerCase();
+
+    if (useMongoDB) {
+        await MongoUser.updateOne({ id: uId }, { $addToSet: { contacts: cId } });
+        await MongoUser.updateOne({ id: cId }, { $addToSet: { contacts: uId } });
+        
+        const contactUser = await MongoUser.findOne({ id: cId });
+        return {
+            id: contactUser.id,
+            name: contactUser.name,
+            age: contactUser.age,
+            photo: contactUser.photo || ''
+        };
+    } else {
+        const db = await readDB();
+        const user = db.users.find(u => u.id.toLowerCase() === uId);
+        const contactUser = db.users.find(u => u.id.toLowerCase() === cId);
+
+        if (!user || !contactUser) return null;
+
+        if (!user.contacts) user.contacts = [];
+        if (!user.contacts.includes(contactUser.id)) {
+            user.contacts.push(contactUser.id);
+        }
+
+        if (!contactUser.contacts) contactUser.contacts = [];
+        if (!contactUser.contacts.includes(user.id)) {
+            contactUser.contacts.push(user.id);
+        }
+
+        await writeDB(db);
+        return {
+            id: contactUser.id,
+            name: contactUser.name,
+            age: contactUser.age,
+            photo: contactUser.photo || ''
+        };
+    }
+}
+
+async function dbGetContacts(userId) {
+    const uId = userId.trim().toLowerCase();
+    if (useMongoDB) {
+        const user = await MongoUser.findOne({ id: uId });
+        if (!user) return [];
+        const contactsList = [];
+        const contactIds = user.contacts || [];
+
+        for (const cId of contactIds) {
+            const contactUser = await MongoUser.findOne({ id: cId });
+            if (contactUser) {
+                const roomKey = [uId, cId].sort().join('_');
+                const lastMsg = await MongoMessage.findOne({ room: roomKey }).sort({ timestamp: -1 });
+                contactsList.push({
+                    id: contactUser.id,
+                    name: contactUser.name,
+                    age: contactUser.age,
+                    photo: contactUser.photo || '',
+                    snippet: lastMsg ? lastMsg.translation : 'No messages yet',
+                    time: lastMsg ? lastMsg.time : '',
+                    badge: 'Chat',
+                    online: true
+                });
+            }
+        }
+        return contactsList;
+    } else {
+        const db = await readDB();
+        const user = db.users.find(u => u.id.toLowerCase() === uId);
+        if (!user) return [];
+        const contactsList = [];
+        const contactIds = user.contacts || [];
+
+        for (const cId of contactIds) {
+            const contactUser = db.users.find(u => u.id.toLowerCase() === cId.toLowerCase());
+            if (contactUser) {
+                const roomKey = [uId, cId].sort().join('_');
+                const thread = db.messages[roomKey] || [];
+                const lastMsg = thread[thread.length - 1];
+                contactsList.push({
+                    id: contactUser.id,
+                    name: contactUser.name,
+                    age: contactUser.age,
+                    photo: contactUser.photo || '',
+                    snippet: lastMsg ? lastMsg.translation : 'No messages yet',
+                    time: lastMsg ? lastMsg.time : '',
+                    badge: 'Chat',
+                    online: true
+                });
+            }
+        }
+        return contactsList;
+    }
+}
+
+async function dbGetMessages(userId, contactId) {
+    const uId = userId.trim().toLowerCase();
+    const cId = contactId.trim().toLowerCase();
+    const roomKey = [uId, cId].sort().join('_');
+
+    if (useMongoDB) {
+        const docs = await MongoMessage.find({ room: roomKey }).sort({ timestamp: 1 });
+        return docs.map(msg => ({
+            sender: msg.senderId === uId ? 'outgoing' : 'incoming',
+            senderId: msg.senderId,
+            translation: msg.translation,
+            original: msg.original,
+            time: msg.time
+        }));
+    } else {
+        const db = await readDB();
+        const thread = db.messages[roomKey] || [];
+        return thread.map(msg => ({
+            sender: msg.senderId ? (msg.senderId === uId ? 'outgoing' : 'incoming') : msg.sender,
+            senderId: msg.senderId || (msg.sender === 'outgoing' ? uId : cId),
+            translation: msg.translation,
+            original: msg.original,
+            time: msg.time
+        }));
+    }
+}
+
+async function dbSaveMessage(userId, contactId, translation, original, time) {
+    const uId = userId.trim().toLowerCase();
+    const cId = contactId.trim().toLowerCase();
+    const roomKey = [uId, cId].sort().join('_');
+
+    if (useMongoDB) {
+        const newMessage = new MongoMessage({
+            room: roomKey,
+            senderId: uId,
+            translation,
+            original,
+            time
+        });
+        await newMessage.save();
+    } else {
+        const db = await readDB();
+        if (!db.messages[roomKey]) {
+            db.messages[roomKey] = [];
+        }
+        const messageObject = {
+            senderId: uId,
+            translation,
+            original,
+            time
+        };
+        db.messages[roomKey].push(messageObject);
+        await writeDB(db);
+    }
+}
+
+async function dbClearMessages(userId, contactId) {
+    const uId = userId.trim().toLowerCase();
+    const cId = contactId.trim().toLowerCase();
+    const roomKey = [uId, cId].sort().join('_');
+
+    if (useMongoDB) {
+        await MongoMessage.deleteMany({ room: roomKey });
+    } else {
+        const db = await readDB();
+        db.messages[roomKey] = [];
+        await writeDB(db);
     }
 }
 
@@ -67,10 +372,8 @@ async function translateText(text, fromLang, toLang) {
     if (fromLang === toLang) return text;
 
     try {
-        // Since the backend has internet access in the user's host environment, we can fetch
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 4000); // 4s timeout
-        // Upgrade to Google Translate Neural API for highly accurate, context and emotion-aware translation
         const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${fromLang}&tl=${toLang}&dt=t&q=${encodeURIComponent(text)}`, {
             signal: controller.signal
         });
@@ -78,7 +381,6 @@ async function translateText(text, fromLang, toLang) {
 
         const data = await res.json();
         if (data && data[0]) {
-            // Google translate returns an array of segments
             const translatedSegments = data[0].map(item => item[0]);
             return translatedSegments.join('');
         }
@@ -90,7 +392,6 @@ async function translateText(text, fromLang, toLang) {
         if (localDictionary[clean] && localDictionary[clean][toLang]) {
             return localDictionary[clean][toLang];
         }
-        // Fallback string
         return `[${toLang.toUpperCase()}] ${text}`;
     }
 }
@@ -114,9 +415,8 @@ app.post('/api/auth/check-user', async (req, res) => {
     const { id } = req.body;
     if (!id) return res.status(400).json({ error: "Missing identifier" });
 
-    const db = await readDB();
-    const exists = db.users.some(u => u.id.toLowerCase() === id.toLowerCase());
-    res.json({ exists });
+    const user = await dbFindUser(id);
+    res.json({ exists: !!user });
 });
 
 // Send Custom Email OTP
@@ -124,7 +424,6 @@ app.post('/api/auth/send-email-otp', async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Missing email" });
 
-    // Generate random 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     emailOtps[email.toLowerCase()] = otp;
 
@@ -138,16 +437,12 @@ app.post('/api/auth/send-email-otp', async (req, res) => {
     console.log(`[DEVELOPMENT] Generated OTP for ${email}: ${otp}`);
 
     try {
-        // Use Promise.race to enforce a 5-second timeout on the email sending
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Email timeout")), 5000));
         await Promise.race([transporter.sendMail(mailOptions), timeoutPromise]);
         console.log(`Email OTP sent to ${email}`);
         res.json({ success: true });
     } catch (error) {
-        console.error("Error sending email (could be timeout or auth issue):", error.message);
-        // We return success anyway so the user can use the OTP printed in the console (or a default)
-        // For testing purposes, we'll allow them to bypass if the email fails.
-        // The user can enter the OTP they see in the server logs.
+        console.error("Error sending email:", error.message);
         res.json({ success: true, warning: "Email failed to send, but proceeding for development." });
     }
 });
@@ -158,14 +453,10 @@ app.post('/api/auth/verify-email-otp', async (req, res) => {
     if (!email || !code) return res.status(400).json({ error: "Missing parameters" });
 
     const storedOtp = emailOtps[email.toLowerCase()];
-    // Allow master OTP 000000 for testing, or the real OTP
     if ((storedOtp && storedOtp === code) || code === '000000') {
-        delete emailOtps[email.toLowerCase()]; // clear OTP after use
+        delete emailOtps[email.toLowerCase()];
         
-        // Find existing user or return success for new user
-        const db = await readDB();
-        const user = db.users.find(u => u.id.toLowerCase() === email.toLowerCase());
-        
+        const user = await dbFindUser(email);
         if (user) {
              res.json({ success: true, isNewUser: false, user: { id: user.id, name: user.name, age: user.age, photo: user.photo } });
         } else {
@@ -181,10 +472,8 @@ app.post('/api/auth/login', async (req, res) => {
     const { id, password } = req.body;
     if (!id || !password) return res.status(400).json({ error: "Missing credentials" });
 
-    const db = await readDB();
-    const user = db.users.find(u => u.id.toLowerCase() === id.toLowerCase() && u.password === password);
-    
-    if (user) {
+    const user = await dbFindUser(id);
+    if (user && await checkPassword(password, user.password)) {
         res.json({ success: true, user: { id: user.id, name: user.name, age: user.age, photo: user.photo } });
     } else {
         res.status(401).json({ success: false, error: "Incorrect password or identifier." });
@@ -196,47 +485,21 @@ app.post('/api/auth/register', async (req, res) => {
     const { id, password, name, age, photo } = req.body;
     if (!id) return res.status(400).json({ error: "Missing identifier" });
 
-    const db = await readDB();
-    const existingIndex = db.users.findIndex(u => u.id.toLowerCase() === id.toLowerCase());
-
-    const userProfile = { id: id.toLowerCase(), password, name, age, photo };
-
-    if (existingIndex > -1) {
-        // Keep old password if not provided
-        if (!password) {
-            userProfile.password = db.users[existingIndex].password;
-        }
-        db.users[existingIndex] = userProfile;
-    } else {
-        db.users.push(userProfile);
-    }
-
-    await writeDB(db);
+    const userProfile = await dbSaveUser(id, password, name, age, photo);
     res.json({ success: true, user: userProfile });
 });
 
 // Get Messages History
 app.get('/api/messages/:userId/:contactId', async (req, res) => {
     const { userId, contactId } = req.params;
-    const db = await readDB();
-    const threadKey = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
-    const thread = db.messages[threadKey] || [];
-    
-    // Map relative sender values based on who is asking
-    const mappedThread = thread.map(msg => ({
-        ...msg,
-        sender: msg.senderId ? (msg.senderId === userId.toLowerCase() ? 'outgoing' : 'incoming') : msg.sender
-    }));
+    const mappedThread = await dbGetMessages(userId, contactId);
     res.json(mappedThread);
 });
 
 // Clear Messages History
 app.delete('/api/messages/:userId/:contactId', async (req, res) => {
     const { userId, contactId } = req.params;
-    const db = await readDB();
-    const threadKey = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
-    db.messages[threadKey] = [];
-    await writeDB(db);
+    await dbClearMessages(userId, contactId);
     res.json({ success: true });
 });
 
@@ -254,9 +517,8 @@ app.post('/api/contacts/add', async (req, res) => {
         return res.status(400).json({ error: "You cannot add yourself as a contact" });
     }
 
-    const db = await readDB();
-    const user = db.users.find(u => u.id.toLowerCase() === uId);
-    const contactUser = db.users.find(u => u.id.toLowerCase() === cId);
+    const user = await dbFindUser(uId);
+    const contactUser = await dbFindUser(cId);
 
     if (!user) {
         return res.status(404).json({ error: "Current user session not found" });
@@ -265,70 +527,21 @@ app.post('/api/contacts/add', async (req, res) => {
         return res.status(404).json({ error: "User with this identifier does not exist" });
     }
 
-    // Add to user's contacts
-    if (!user.contacts) user.contacts = [];
-    if (!user.contacts.includes(contactUser.id)) {
-        user.contacts.push(contactUser.id);
-    }
-
-    // Add to contact's contacts (mutual add)
-    if (!contactUser.contacts) contactUser.contacts = [];
-    if (!contactUser.contacts.includes(user.id)) {
-        contactUser.contacts.push(user.id);
-    }
-
-    await writeDB(db);
-    res.json({
-        success: true,
-        contact: {
-            id: contactUser.id,
-            name: contactUser.name,
-            age: contactUser.age,
-            photo: contactUser.photo || ''
-        }
-    });
+    const addedContact = await dbAddContact(uId, cId);
+    res.json({ success: true, contact: addedContact });
 });
 
 // Get Contacts List Endpoint
 app.get('/api/contacts/:userId', async (req, res) => {
     const { userId } = req.params;
-    const db = await readDB();
-    const user = db.users.find(u => u.id.toLowerCase() === userId.toLowerCase());
-    if (!user) {
-        return res.status(404).json({ error: "User not found" });
-    }
-
-    const contactsList = [];
-    const contactIds = user.contacts || [];
-
-    for (const cId of contactIds) {
-        const contactUser = db.users.find(u => u.id.toLowerCase() === cId.toLowerCase());
-        if (contactUser) {
-            // Get last message in the room
-            const roomKey = [userId.toLowerCase(), cId.toLowerCase()].sort().join('_');
-            const thread = db.messages[roomKey] || [];
-            const lastMsg = thread[thread.length - 1];
-
-            contactsList.push({
-                id: contactUser.id,
-                name: contactUser.name,
-                age: contactUser.age,
-                photo: contactUser.photo || '',
-                snippet: lastMsg ? lastMsg.translation : 'No messages yet',
-                time: lastMsg ? lastMsg.time : '',
-                badge: 'Chat',
-                online: true
-            });
-        }
-    }
+    const contactsList = await dbGetContacts(userId);
     res.json(contactsList);
 });
 
-// Get User Profile Endpoint (Public/Contact details lookup)
+// Get User Profile Endpoint
 app.get('/api/users/:id', async (req, res) => {
     const { id } = req.params;
-    const db = await readDB();
-    const user = db.users.find(u => u.id.toLowerCase() === id.toLowerCase());
+    const user = await dbFindUser(id);
     if (user) {
         res.json({
             id: user.id,
@@ -352,34 +565,18 @@ const io = new Server(server, {
 io.on('connection', (socket) => {
     console.log(`User connected: ${socket.id}`);
 
-    // Join room
     socket.on('join_chat', ({ userId, contactId }) => {
         const room = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
         socket.join(room);
         console.log(`Socket ${socket.id} joined room: ${room}`);
     });
 
-    // Send Message
     socket.on('send_msg', async (data) => {
         const { userId, contactId, translation, original, time } = data;
         const room = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
         
-        // Save message to database with senderId for perspective resolution
-        const db = await readDB();
-        if (!db.messages[room]) {
-            db.messages[room] = [];
-        }
-        
-        const messageObject = {
-            senderId: userId.toLowerCase(),
-            translation,
-            original,
-            time
-        };
-        db.messages[room].push(messageObject);
-        await writeDB(db);
+        await dbSaveMessage(userId, contactId, translation, original, time);
 
-        // Broadcast to other room members
         const relayMessage = {
             sender: 'incoming',
             translation,
