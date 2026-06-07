@@ -556,6 +556,9 @@ function Step2EmailVerify() {
                 localStorage.setItem('onboarding_name', data.user.name || 'Explorer');
                 localStorage.setItem('onboarding_age', data.user.age || '25');
                 localStorage.setItem('onboarding_photo', data.user.photo || '');
+                if (data.user && data.user.language) {
+                  localStorage.setItem('settings_chat_lang', data.user.language);
+                }
                 navigate('/success');
               })
               .catch(() => {
@@ -641,6 +644,9 @@ function Step2LoginPassword() {
       localStorage.setItem('onboarding_name', data.user.name || 'Explorer');
       localStorage.setItem('onboarding_age', data.user.age || '25');
       localStorage.setItem('onboarding_photo', data.user.photo || '');
+      if (data.user && data.user.language) {
+        localStorage.setItem('settings_chat_lang', data.user.language);
+      }
       globalShowToast('Authentication', 'Login Successful!', 'normal');
       setTimeout(() => navigate('/success'), 800);
     })
@@ -1244,6 +1250,7 @@ function Step6Language() {
 
   const handleComplete = () => {
     localStorage.setItem('settings_ui_lang', uiLang);
+    localStorage.setItem('settings_chat_lang', uiLang);
     document.cookie = `googtrans=/en/${uiLang}; path=/; domain=${window.location.hostname}`;
     document.cookie = `googtrans=/en/${uiLang}; path=/;`;
     
@@ -2203,16 +2210,14 @@ function ChatDetail() {
   const scrollRef = useRef(null);
   const translationTimeoutRef = useRef(null);
 
-  const [userLang, setUserLang] = useState(localStorage.getItem('settings_ui_lang') || 'en');
+  const [userLang, setUserLang] = useState(localStorage.getItem('settings_chat_lang') || localStorage.getItem('settings_ui_lang') || 'en');
   const [partnerLang, setPartnerLang] = useState('en');
   const [isPartnerOnline, setIsPartnerOnline] = useState(false);
   const imageInputRef = useRef(null);
 
   const handleUserLangChange = (newLang) => {
     setUserLang(newLang);
-    localStorage.setItem('settings_ui_lang', newLang);
-    document.cookie = `googtrans=/en/${newLang}; path=/; domain=${window.location.hostname}`;
-    document.cookie = `googtrans=/en/${newLang}; path=/;`;
+    localStorage.setItem('settings_chat_lang', newLang);
     
     fetch(API_BASE_URL + '/api/auth/register', {
       method: 'POST',
@@ -2554,7 +2559,7 @@ function ChatDetail() {
       {dropdownOpen && (
         <div class="options-dropdown-menu" id="chat-options-dropdown">
           <button class="btn-dropdown-item" onClick={handleClearChat}><i class="fa-regular fa-trash-can"></i> Clear Chat History</button>
-          <button class="btn-dropdown-item" onClick={() => { setUserLang(localStorage.getItem('settings_ui_lang') || 'en'); setPartnerLang(contactUser?.language || 'en'); }}><i class="fa-solid fa-arrows-rotate"></i> Reset Languages</button>
+          <button class="btn-dropdown-item" onClick={() => { setUserLang(localStorage.getItem('settings_chat_lang') || localStorage.getItem('settings_ui_lang') || 'en'); setPartnerLang(contactUser?.language || 'en'); }}><i class="fa-solid fa-arrows-rotate"></i> Reset Languages</button>
         </div>
       )}
 
