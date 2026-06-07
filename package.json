@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "Smart Messenger full-stack translator chat application",
   "scripts": {
-    "dev": "node run_dev.js"
+    "dev": "node run_dev.js",
+    "start": "node server/index.js"
   },
   "dependencies": {
     "@capacitor/cli": "^8.4.0",
