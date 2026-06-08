@@ -683,10 +683,30 @@ io.on('connection', (socket) => {
         
         await dbSaveMessage(userId, contactId, translation, original, time, image, msgId);
 
+        // Translate the original message into the receiver's preferred language
+        let receiverTranslation = translation;
+        if (!image && original && original !== '[Image Shared]') {
+            try {
+                const receiver = await dbFindUser(contactId);
+                const receiverLang = (receiver && receiver.language) ? receiver.language : 'en';
+                // Detect sender language from their profile
+                const sender = await dbFindUser(userId);
+                const senderLang = (sender && sender.language) ? sender.language : 'en';
+                if (senderLang !== receiverLang) {
+                    receiverTranslation = await translateText(original, senderLang, receiverLang);
+                } else {
+                    receiverTranslation = original;
+                }
+            } catch (err) {
+                console.error("Server-side translation for receiver failed:", err.message);
+                receiverTranslation = translation;
+            }
+        }
+
         const relayMessage = {
             id: msgId,
             sender: 'incoming',
-            translation,
+            translation: receiverTranslation,
             original,
             image: image || '',
             time

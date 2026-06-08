@@ -2215,6 +2215,22 @@ function ChatDetail() {
   const [isPartnerOnline, setIsPartnerOnline] = useState(false);
   const imageInputRef = useRef(null);
 
+  // Image Lightbox state
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const [lightboxZoom, setLightboxZoom] = useState(1);
+  const [lightboxPos, setLightboxPos] = useState({ x: 0, y: 0 });
+  const lightboxDragRef = useRef({ dragging: false, startX: 0, startY: 0, scrollX: 0, scrollY: 0 });
+
+  // Language locale map for speech recognition
+  const LANG_LOCALE_MAP = {
+    'hi': 'hi-IN', 'bn': 'bn-IN', 'te': 'te-IN', 'ta': 'ta-IN',
+    'mr': 'mr-IN', 'gu': 'gu-IN', 'kn': 'kn-IN', 'ml': 'ml-IN',
+    'ur': 'ur-IN', 'pa': 'pa-IN', 'or': 'or-IN',
+    'ja': 'ja-JP', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE',
+    'zh': 'zh-CN', 'ru': 'ru-RU', 'ko': 'ko-KR', 'ar': 'ar-SA',
+    'it': 'it-IT', 'pt': 'pt-BR', 'en': 'en-US'
+  };
+
   const handleUserLangChange = (newLang) => {
     setUserLang(newLang);
     localStorage.setItem('settings_chat_lang', newLang);
@@ -2282,62 +2298,59 @@ function ChatDetail() {
   const toggleVoiceListening = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      globalShowToast("Speech API Error", "Speech Recognition is not supported in this browser. Try Chrome/Edge.", "normal");
+      globalShowToast("Speech Not Supported", "Voice input is not available in this browser or app. Please type your message instead.", "normal");
       return;
     }
 
     if (isListening) {
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try { recognitionRef.current.stop(); } catch(e) {}
       }
       setIsListening(false);
       return;
     }
 
-    const rec = new SpeechRecognition();
-    rec.lang = userLang === 'hi' ? 'hi-IN' :
-               userLang === 'bn' ? 'bn-IN' :
-               userLang === 'te' ? 'te-IN' :
-               userLang === 'ta' ? 'ta-IN' :
-               userLang === 'mr' ? 'mr-IN' :
-               userLang === 'gu' ? 'gu-IN' :
-               userLang === 'kn' ? 'kn-IN' :
-               userLang === 'ml' ? 'ml-IN' :
-               userLang === 'ur' ? 'ur-IN' :
-               userLang === 'pa' ? 'pa-IN' :
-               userLang === 'ja' ? 'ja-JP' :
-               userLang === 'es' ? 'es-ES' :
-               userLang === 'fr' ? 'fr-FR' :
-               userLang === 'de' ? 'de-DE' :
-               userLang === 'zh' ? 'zh-CN' :
-               userLang === 'ru' ? 'ru-RU' :
-               userLang === 'ko' ? 'ko-KR' : 'en-US';
-    rec.continuous = false;
-    rec.interimResults = false;
+    try {
+      const rec = new SpeechRecognition();
+      rec.lang = LANG_LOCALE_MAP[userLang] || 'en-US';
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.maxAlternatives = 1;
 
-    rec.onstart = () => {
-      setIsListening(true);
-      globalShowToast("Voice Recognition", "Speak now...", "normal");
-    };
+      rec.onstart = () => {
+        setIsListening(true);
+        globalShowToast("Voice Recognition", `Listening in ${TRANSLATION_LANGUAGES.find(l => l.code === userLang)?.name || 'English'}...`, "normal");
+      };
 
-    rec.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      setInputValue(transcript);
-      globalShowToast("Voice Captured", `Transcribed: "${transcript}"`, "normal");
-    };
+      rec.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        setInputValue(prev => prev ? prev + ' ' + transcript : transcript);
+        globalShowToast("Voice Captured", `"${transcript}"`, "normal");
+      };
 
-    rec.onerror = (err) => {
-      console.error("Speech recognition error:", err);
+      rec.onerror = (err) => {
+        console.error("Speech recognition error:", err);
+        setIsListening(false);
+        if (err.error === 'not-allowed' || err.error === 'service-not-allowed') {
+          globalShowToast("Microphone Blocked", "Please allow microphone access in your browser/app settings.", "normal");
+        } else if (err.error === 'no-speech') {
+          globalShowToast("No Speech", "No speech was detected. Please try again.", "normal");
+        } else {
+          globalShowToast("Voice Error", `Error: ${err.error || "Failed to capture speech. Try Chrome browser."}`, "normal");
+        }
+      };
+
+      rec.onend = () => {
+        setIsListening(false);
+      };
+
+      recognitionRef.current = rec;
+      rec.start();
+    } catch (startErr) {
+      console.error("Failed to start speech recognition:", startErr);
       setIsListening(false);
-      globalShowToast("Voice Error", `Error: ${err.error || "failed to capture speech"}`, "normal");
-    };
-
-    rec.onend = () => {
-      setIsListening(false);
-    };
-
-    recognitionRef.current = rec;
-    rec.start();
+      globalShowToast("Voice Error", "Could not start voice input. Try using Chrome browser on your device.", "normal");
+    }
   };
 
   // Fetch contact user details
@@ -2574,11 +2587,16 @@ function ChatDetail() {
           {messages.map((m) => (
             <div key={m.id || Math.random()} class={`message-bubble ${m.sender}`} style={{ position: 'relative' }}>
               {m.image ? (
-                <img 
-                  src={m.image} 
-                  alt="Shared" 
-                  style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px', marginBottom: '0.4rem', display: 'block', objectFit: 'contain' }} 
-                />
+                <div style={{ cursor: 'pointer', position: 'relative' }} onClick={() => { setLightboxImage(m.image); setLightboxZoom(1); setLightboxPos({ x: 0, y: 0 }); }}>
+                  <img 
+                    src={m.image} 
+                    alt="Shared" 
+                    style={{ maxWidth: '100%', maxHeight: '220px', borderRadius: '10px', marginBottom: '0.4rem', display: 'block', objectFit: 'cover', boxShadow: '0 2px 12px rgba(0,0,0,0.3)' }} 
+                  />
+                  <div style={{ position: 'absolute', bottom: '0.65rem', right: '0.5rem', background: 'rgba(0,0,0,0.55)', borderRadius: '50%', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i class="fa-solid fa-expand" style={{ color: 'white', fontSize: '0.7rem' }}></i>
+                  </div>
+                </div>
               ) : (
                 <>
                   <span class="msg-translation-text">{m.translation}</span>
@@ -2652,6 +2670,81 @@ function ChatDetail() {
           </div>
         </form>
       </footer>
+
+      {/* Image Lightbox Fullscreen Viewer */}
+      {lightboxImage && (
+        <div 
+          style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.92)', zIndex: 9999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
+          onClick={() => { setLightboxImage(null); setLightboxZoom(1); setLightboxPos({ x: 0, y: 0 }); }}
+        >
+          {/* Top bar with controls */}
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.25rem', zIndex: 10 }}>
+            <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', fontWeight: 500 }}>
+              <i class="fa-regular fa-image" style={{ marginRight: '0.4rem' }}></i> Image Preview
+            </span>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <button 
+                onClick={(e) => { e.stopPropagation(); setLightboxZoom(z => Math.max(0.5, z - 0.25)); }}
+                style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
+                title="Zoom Out"
+              >
+                <i class="fa-solid fa-minus"></i>
+              </button>
+              <span style={{ color: 'white', fontSize: '0.8rem', minWidth: '40px', textAlign: 'center' }}>{Math.round(lightboxZoom * 100)}%</span>
+              <button 
+                onClick={(e) => { e.stopPropagation(); setLightboxZoom(z => Math.min(4, z + 0.25)); }}
+                style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
+                title="Zoom In"
+              >
+                <i class="fa-solid fa-plus"></i>
+              </button>
+              <button 
+                onClick={(e) => { e.stopPropagation(); setLightboxZoom(1); setLightboxPos({ x: 0, y: 0 }); }}
+                style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem' }}
+                title="Reset Zoom"
+              >
+                <i class="fa-solid fa-arrows-rotate"></i>
+              </button>
+              <button 
+                onClick={(e) => { e.stopPropagation(); const a = document.createElement('a'); a.href = lightboxImage; a.download = 'smart-messenger-image.png'; a.click(); }}
+                style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem' }}
+                title="Download"
+              >
+                <i class="fa-solid fa-download"></i>
+              </button>
+              <button 
+                onClick={(e) => { e.stopPropagation(); setLightboxImage(null); setLightboxZoom(1); setLightboxPos({ x: 0, y: 0 }); }}
+                style={{ background: 'rgba(255,70,70,0.25)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
+                title="Close"
+              >
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+          </div>
+          {/* The image itself */}
+          <div 
+            style={{ overflow: 'auto', maxWidth: '95vw', maxHeight: '85vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img 
+              src={lightboxImage} 
+              alt="Full View" 
+              style={{ 
+                transform: `scale(${lightboxZoom})`, 
+                transition: 'transform 0.2s ease', 
+                maxWidth: lightboxZoom <= 1 ? '90vw' : 'none', 
+                maxHeight: lightboxZoom <= 1 ? '80vh' : 'none', 
+                borderRadius: '12px', 
+                boxShadow: '0 8px 48px rgba(0,0,0,0.5)',
+                objectFit: 'contain',
+                cursor: lightboxZoom > 1 ? 'grab' : 'zoom-in'
+              }} 
+              onClick={(e) => { e.stopPropagation(); setLightboxZoom(z => z >= 2 ? 1 : z + 0.5); }}
+              draggable={false}
+            />
+          </div>
+        </div>
+      )}
 
     </main>
   );
