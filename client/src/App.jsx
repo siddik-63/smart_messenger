@@ -1382,6 +1382,7 @@ function Step6Success() {
     localStorage.removeItem('onboarding_name');
     localStorage.removeItem('onboarding_age');
     localStorage.removeItem('onboarding_photo');
+    localStorage.removeItem('smart_messenger_logged_in');
     navigate('/');
   };
 
@@ -1437,7 +1438,7 @@ function Step6Success() {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', width: '100%' }}>
-            <button class="btn-primary" onClick={() => navigate('/dashboard')}>
+            <button class="btn-primary" onClick={() => { localStorage.setItem('smart_messenger_logged_in', 'true'); navigate('/dashboard'); }}>
               Enter Chat Dashboard
             </button>
             <button
@@ -1643,10 +1644,23 @@ function Dashboard() {
   };
 
   useEffect(() => {
-    if (!userId) {
+    if (!userId || localStorage.getItem('smart_messenger_logged_in') !== 'true') {
       navigate('/');
       return;
     }
+
+    // Restore user profile from server DB (in case of re-login)
+    fetch(API_BASE_URL + `/api/users/${userId}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          if (data.name) { setUserName(data.name); localStorage.setItem('onboarding_name', data.name); }
+          if (data.age) { setUserAge(data.age); localStorage.setItem('onboarding_age', data.age); }
+          if (data.photo) { setUserPhoto(data.photo); localStorage.setItem('onboarding_photo', data.photo); }
+          if (data.language) { localStorage.setItem('settings_chat_lang', data.language); }
+        }
+      })
+      .catch(err => console.error('Failed to restore profile from server:', err));
 
     fetch(API_BASE_URL + `/api/contacts/${userId}`)
       .then(res => res.json())
@@ -1682,13 +1696,13 @@ function Dashboard() {
   );
 
   const handleLogout = () => {
-    localStorage.removeItem('onboarding_id');
+    // Only clear session flag — profile data stays in localStorage for quick re-login
     localStorage.removeItem('smart_messenger_logged_in');
     navigate('/');
   };
 
   const handleResetRegistration = () => {
-    if (confirm("Are you sure you want to reset your registration details? This will delete your current session setup, but keep the registration accounts list.")) {
+    if (confirm("Are you sure you want to completely reset your account on this device? Your server data (contacts, messages) will remain intact for next login.")) {
       localStorage.removeItem('onboarding_id');
       localStorage.removeItem('onboarding_otp');
       localStorage.removeItem('onboarding_is_new');
@@ -1698,6 +1712,9 @@ function Dashboard() {
       localStorage.removeItem('onboarding_age');
       localStorage.removeItem('onboarding_photo');
       localStorage.removeItem('smart_messenger_logged_in');
+      localStorage.removeItem('settings_chat_lang');
+      localStorage.removeItem('settings_ui_lang');
+      localStorage.removeItem('settings_live_typing');
       navigate('/');
     }
   };
@@ -2386,7 +2403,7 @@ function ChatDetail() {
 
   // Set up WebSockets & fetch past history
   useEffect(() => {
-    if (!userId) {
+    if (!userId || localStorage.getItem('smart_messenger_logged_in') !== 'true') {
       navigate('/');
       return;
     }
