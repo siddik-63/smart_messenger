@@ -98,6 +98,15 @@ function Step1Login() {
   const [userExists, setUserExists] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Auto-redirect to dashboard if already logged in
+  useEffect(() => {
+    const isLoggedIn = localStorage.getItem('smart_messenger_logged_in');
+    const savedId = localStorage.getItem('onboarding_id');
+    if (isLoggedIn === 'true' && savedId && savedId.trim().length > 2) {
+      navigate('/dashboard');
+    }
+  }, []);
+
   useEffect(() => {
     localStorage.setItem('onboarding_id', identifier);
     if (identifier.trim().length > 3) {
@@ -146,7 +155,8 @@ function Step1Login() {
           photo: user.photoURL || ''
         })
       }).then(() => {
-        setTimeout(() => navigate('/success'), 800);
+        localStorage.setItem('smart_messenger_logged_in', 'true');
+        setTimeout(() => navigate('/dashboard'), 800);
       });
       
     } catch (error) {
@@ -647,8 +657,9 @@ function Step2LoginPassword() {
       if (data.user && data.user.language) {
         localStorage.setItem('settings_chat_lang', data.user.language);
       }
+      localStorage.setItem('smart_messenger_logged_in', 'true');
       globalShowToast('Authentication', 'Login Successful!', 'normal');
-      setTimeout(() => navigate('/success'), 800);
+      setTimeout(() => navigate('/dashboard'), 800);
     })
     .catch(err => {
       globalShowToast('Login Failure', err.message, 'normal');
@@ -1262,7 +1273,8 @@ function Step6Language() {
       body: JSON.stringify({ id: identifier, language: uiLang })
     })
     .finally(() => {
-      navigate('/success');
+      localStorage.setItem('smart_messenger_logged_in', 'true');
+      navigate('/dashboard');
       setTimeout(() => window.location.reload(), 100);
     });
   };
@@ -1671,6 +1683,7 @@ function Dashboard() {
 
   const handleLogout = () => {
     localStorage.removeItem('onboarding_id');
+    localStorage.removeItem('smart_messenger_logged_in');
     navigate('/');
   };
 
@@ -1684,6 +1697,7 @@ function Dashboard() {
       localStorage.removeItem('onboarding_name');
       localStorage.removeItem('onboarding_age');
       localStorage.removeItem('onboarding_photo');
+      localStorage.removeItem('smart_messenger_logged_in');
       navigate('/');
     }
   };
@@ -2380,8 +2394,26 @@ function ChatDetail() {
     // Fetch initial chat logs from Server DB
     fetch(API_BASE_URL + `/api/messages/${userId}/${contactId}`)
       .then(res => res.json())
-      .then(data => {
-        setMessages(data);
+      .then(async (data) => {
+        // Translate incoming messages to user's language
+        const myLang = localStorage.getItem('settings_chat_lang') || localStorage.getItem('settings_ui_lang') || 'en';
+        const translatedData = await Promise.all(data.map(async (m) => {
+          if (m.sender === 'incoming' && m.original && m.original !== '[Image Shared]' && !m.image) {
+            try {
+              const res = await fetch(API_BASE_URL + '/api/translate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: m.original, fromLang: 'auto', toLang: myLang })
+              });
+              const d = await res.json();
+              return { ...m, translation: d.translatedText };
+            } catch {
+              return m;
+            }
+          }
+          return m;
+        }));
+        setMessages(translatedData);
         setTimeout(scrollToBottom, 200);
       })
       .catch(err => console.error(err));
