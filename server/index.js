@@ -689,14 +689,8 @@ io.on('connection', (socket) => {
             try {
                 const receiver = await dbFindUser(contactId);
                 const receiverLang = (receiver && receiver.language) ? receiver.language : 'en';
-                // Detect sender language from their profile
-                const sender = await dbFindUser(userId);
-                const senderLang = (sender && sender.language) ? sender.language : 'en';
-                if (senderLang !== receiverLang) {
-                    receiverTranslation = await translateText(original, senderLang, receiverLang);
-                } else {
-                    receiverTranslation = original;
-                }
+                // Always use auto-detection for source language — sender may type in any language
+                receiverTranslation = await translateText(original, 'auto', receiverLang);
             } catch (err) {
                 console.error("Server-side translation for receiver failed:", err.message);
                 receiverTranslation = translation;

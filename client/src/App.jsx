@@ -2,6 +2,7 @@ import { API_BASE_URL } from './config';
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import io from 'socket.io-client';
+import { SpeechRecognition as CapSpeechRecognition } from '@capacitor-community/speech-recognition';
 
 import { auth, googleProvider } from './firebase.js';
 import { RecaptchaVerifier, signInWithPhoneNumber, signInWithPopup, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
@@ -2326,31 +2327,91 @@ function ChatDetail() {
     }
   };
 
-  const toggleVoiceListening = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      globalShowToast("Speech Not Supported", "Voice input is not available in this browser or app. Please type your message instead.", "normal");
-      return;
-    }
-
+  const toggleVoiceListening = async () => {
+    // If already listening, stop
     if (isListening) {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch(e) {}
+      try {
+        // Try Capacitor native stop
+        await CapSpeechRecognition.stop();
+      } catch(e) {
+        // Fallback to Web API stop
+        if (recognitionRef.current) {
+          try { recognitionRef.current.stop(); } catch(e2) {}
+        }
       }
       setIsListening(false);
       return;
     }
 
+    const langLocale = LANG_LOCALE_MAP[userLang] || 'en-US';
+    const langName = TRANSLATION_LANGUAGES.find(l => l.code === userLang)?.name || 'English';
+
+    // Try Capacitor native speech recognition first (works on Android app)
     try {
-      const rec = new SpeechRecognition();
-      rec.lang = LANG_LOCALE_MAP[userLang] || 'en-US';
+      const permResult = await CapSpeechRecognition.requestPermissions();
+      if (permResult.speechRecognition === 'denied') {
+        globalShowToast("Microphone Blocked", "Please allow microphone access in your device settings.", "normal");
+        return;
+      }
+
+      const available = await CapSpeechRecognition.available();
+      if (available.available) {
+        setIsListening(true);
+        globalShowToast("Voice Recognition", `Listening in ${langName}...`, "normal");
+
+        CapSpeechRecognition.addListener('partialResults', (data) => {
+          if (data.matches && data.matches.length > 0) {
+            setInputValue(prev => prev ? prev + ' ' + data.matches[0] : data.matches[0]);
+          }
+        });
+
+        await CapSpeechRecognition.start({
+          language: langLocale,
+          maxResults: 3,
+          prompt: `Speak in ${langName}`,
+          partialResults: true,
+          popup: false
+        });
+
+        // Listen for results
+        const result = await CapSpeechRecognition.start({
+          language: langLocale,
+          maxResults: 1,
+          partialResults: false,
+          popup: false
+        }).catch(() => null);
+
+        setIsListening(false);
+        CapSpeechRecognition.removeAllListeners();
+
+        if (result && result.matches && result.matches.length > 0) {
+          const transcript = result.matches[0];
+          setInputValue(prev => prev ? prev + ' ' + transcript : transcript);
+          globalShowToast("Voice Captured", `"${transcript}"`, "normal");
+        }
+        return; // Success with native, skip web fallback
+      }
+    } catch (capErr) {
+      console.log('Capacitor speech not available, falling back to Web API:', capErr.message);
+    }
+
+    // Fallback: Web Speech API (works in Chrome browser)
+    const WebSpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!WebSpeechRecognition) {
+      globalShowToast("Speech Not Supported", "Voice input is not available. Please type your message instead.", "normal");
+      return;
+    }
+
+    try {
+      const rec = new WebSpeechRecognition();
+      rec.lang = langLocale;
       rec.continuous = false;
       rec.interimResults = false;
       rec.maxAlternatives = 1;
 
       rec.onstart = () => {
         setIsListening(true);
-        globalShowToast("Voice Recognition", `Listening in ${TRANSLATION_LANGUAGES.find(l => l.code === userLang)?.name || 'English'}...`, "normal");
+        globalShowToast("Voice Recognition", `Listening in ${langName}...`, "normal");
       };
 
       rec.onresult = (event) => {
@@ -2367,7 +2428,7 @@ function ChatDetail() {
         } else if (err.error === 'no-speech') {
           globalShowToast("No Speech", "No speech was detected. Please try again.", "normal");
         } else {
-          globalShowToast("Voice Error", `Error: ${err.error || "Failed to capture speech. Try Chrome browser."}`, "normal");
+          globalShowToast("Voice Error", `Error: ${err.error || "Failed to capture speech."}`, "normal");
         }
       };
 
@@ -2380,7 +2441,7 @@ function ChatDetail() {
     } catch (startErr) {
       console.error("Failed to start speech recognition:", startErr);
       setIsListening(false);
-      globalShowToast("Voice Error", "Could not start voice input. Try using Chrome browser on your device.", "normal");
+      globalShowToast("Voice Error", "Could not start voice input. Try using Chrome browser.", "normal");
     }
   };
 
