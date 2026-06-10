@@ -57,6 +57,7 @@ async function writeDB(db) {
 // -----------------------------------------------------------------
 const useMongoDB = !!process.env.MONGODB_URI;
 const admin = require('firebase-admin');
+const { getDatabase } = require('firebase-admin/database');
 
 let db = null;
 let useFirebase = false;
@@ -67,10 +68,10 @@ try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
         console.log("Initializing Firebase Admin using FIREBASE_SERVICE_ACCOUNT_JSON...");
         admin.initializeApp({
-            credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)),
+            credential: admin.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)),
             databaseURL: firebaseDbUrl
         });
-        db = admin.database();
+        db = getDatabase();
         useFirebase = true;
     } else {
         const saPath = path.join(__dirname, 'firebase-service-account.json');
@@ -78,10 +79,10 @@ try {
         if (fsSync.existsSync(saPath)) {
             console.log("Initializing Firebase Admin using firebase-service-account.json...");
             admin.initializeApp({
-                credential: admin.credential.cert(require(saPath)),
+                credential: admin.cert(require(saPath)),
                 databaseURL: firebaseDbUrl
             });
-            db = admin.database();
+            db = getDatabase();
             useFirebase = true;
         } else {
             console.warn("\n========================================================");
