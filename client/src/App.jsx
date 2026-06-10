@@ -171,15 +171,28 @@ function Step1Login() {
   useEffect(() => {
     localStorage.setItem('onboarding_id', identifier);
     if (identifier.trim().length > 3) {
+      const idClean = identifier.trim();
+      let lookupId = idClean.toLowerCase();
+      
+      // Normalize phone input to match database key format (+91 prefix fallback)
+      if (/^\+?\d{10,15}$/.test(idClean.replace(/[-\s]/g, ''))) {
+        let formatted = idClean.replace(/[-\s]/g, '');
+        if (!formatted.startsWith('+')) {
+          formatted = '+91' + formatted;
+        }
+        lookupId = formatted;
+      }
+
       // Check if user exists in Firestore
-      const userRef = doc(db, 'users', identifier.trim().toLowerCase());
+      const userRef = doc(db, 'users', lookupId);
       getDoc(userRef)
         .then(docSnap => {
           if (docSnap.exists()) {
-            const data = docSnap.data();
-            setUserExists(!!data && !data.isPlaceholder);
+            setUserExists(true);
+            setIsPasswordMode(true);
           } else {
             setUserExists(false);
+            setIsPasswordMode(false);
           }
         })
         .catch(err => console.error(err));
@@ -876,14 +889,26 @@ function Step3Password() {
       const name = localStorage.getItem('onboarding_name') || 'Explorer';
       const age = localStorage.getItem('onboarding_age') || '25';
       const photo = localStorage.getItem('onboarding_photo') || '';
+      const cleanId = identifier.trim().toLowerCase();
 
-      fetch(API_BASE_URL + '/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: identifier, password, name, age, photo })
-      })
-      .then(() => navigate('/success'))
-      .catch(() => navigate('/success'));
+      sha256(password).then((hashedPassword) => {
+        const userRef = doc(db, 'users', cleanId);
+        setDoc(userRef, {
+          id: cleanId,
+          password: hashedPassword,
+          name,
+          age,
+          photo
+        }, { merge: true })
+        .then(() => {
+          localStorage.removeItem('onboarding_is_reset');
+          navigate('/success');
+        })
+        .catch((err) => {
+          console.error("Failed to reset password in Firestore:", err);
+          globalShowToast('Reset Error', 'Failed to save password.', 'normal');
+        });
+      });
     } else {
       navigate('/details');
     }
@@ -2274,11 +2299,8 @@ function Dashboard() {
                           localStorage.setItem('settings_chat_lang', l.code);
                           setActiveChatLangDropdown(false);
                           // Update server profile
-                          fetch(API_BASE_URL + '/api/auth/register', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ id: userId, language: l.code })
-                          }).catch(err => console.error(err));
+                          const uId = userId.toLowerCase();
+                          updateDoc(doc(db, 'users', uId), { language: l.code }).catch(err => console.error(err));
                           globalShowToast('Chat Language', `All chats will now appear in ${l.name}`, 'normal');
                         }} style={{ padding: '0.6rem 1rem', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.02)' }} className="hover-bg-light">
                           {l.name}
