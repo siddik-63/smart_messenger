@@ -652,6 +652,7 @@ function Step2LoginPassword() {
       return res.json();
     })
     .then(data => {
+      localStorage.setItem('onboarding_password', password); // Save password for auto-restore
       localStorage.setItem('onboarding_name', data.user.name || 'Explorer');
       localStorage.setItem('onboarding_age', data.user.age || '25');
       localStorage.setItem('onboarding_photo', data.user.photo || '');
@@ -1640,7 +1641,11 @@ function Dashboard() {
     if (confirm(`Remove this contact from your chat list?`)) {
       fetch(API_BASE_URL + `/api/contacts/${userId}/${contactId}`, { method: 'DELETE' })
         .then(() => {
-          setContacts(prev => prev.filter(c => c.id !== contactId));
+          setContacts(prev => {
+            const next = prev.filter(c => c.id !== contactId);
+            localStorage.setItem('smart_messenger_contacts_backup', JSON.stringify(next.map(c => c.id)));
+            return next;
+          });
           globalShowToast("Delete Contact", "Contact removed successfully.", "normal");
         })
         .catch(err => console.error(err));
@@ -1653,27 +1658,90 @@ function Dashboard() {
       return;
     }
 
-    // Restore user profile from server DB (in case of re-login)
+    // Helper to restore contacts from backup to server
+    const restoreContactsFromServer = (uid) => {
+      const backupContactsStr = localStorage.getItem('smart_messenger_contacts_backup');
+      if (backupContactsStr) {
+        try {
+          const backupContacts = JSON.parse(backupContactsStr);
+          if (Array.isArray(backupContacts) && backupContacts.length > 0) {
+            console.log("Restoring contacts from local backup to server:", backupContacts);
+            let promiseChain = Promise.resolve();
+            backupContacts.forEach(contactId => {
+              promiseChain = promiseChain.then(() => {
+                return fetch(API_BASE_URL + '/api/contacts/add', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ userId: uid, contactId })
+                })
+                .then(res => res.json())
+                .catch(err => console.error(`Error auto-restoring contact ${contactId}:`, err));
+              });
+            });
+
+            // Refresh UI once done restoring
+            promiseChain.finally(() => {
+              fetch(API_BASE_URL + `/api/contacts/${uid}`)
+                .then(res => res.json())
+                .then(data => {
+                  if (Array.isArray(data)) {
+                    setContacts(data);
+                  }
+                });
+            });
+          }
+        } catch (e) {
+          console.error("Failed to parse contacts backup:", e);
+        }
+      }
+    };
+
+    // Restore user profile from server DB (in case of re-login or database wipe)
     fetch(API_BASE_URL + `/api/users/${userId}`)
-      .then(res => res.ok ? res.json() : null)
+      .then(res => {
+        if (res.status === 404) {
+          console.warn("User profile not found on server (DB might have reset). Re-registering user...");
+          const password = localStorage.getItem('onboarding_password') || 'Password123!';
+          const name = localStorage.getItem('onboarding_name') || 'Explorer';
+          const age = localStorage.getItem('onboarding_age') || '25';
+          const photo = localStorage.getItem('onboarding_photo') || '';
+          const lang = localStorage.getItem('settings_chat_lang') || 'en';
+
+          return fetch(API_BASE_URL + '/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: userId, password, name, age, photo, language: lang })
+          })
+          .then(regRes => regRes.ok ? regRes.json() : null)
+          .then(regData => {
+            if (regData) {
+              console.log("Auto re-registered user on server successfully:", regData);
+              restoreContactsFromServer(userId);
+            }
+            return null;
+          });
+        }
+        return res.ok ? res.json() : null;
+      })
       .then(data => {
         if (data) {
           if (data.name) { setUserName(data.name); localStorage.setItem('onboarding_name', data.name); }
           if (data.age) { setUserAge(data.age); localStorage.setItem('onboarding_age', data.age); }
           if (data.photo) { setUserPhoto(data.photo); localStorage.setItem('onboarding_photo', data.photo); }
           if (data.language) { localStorage.setItem('settings_chat_lang', data.language); }
+          
+          // Fetch contacts since profile exists
+          return fetch(API_BASE_URL + `/api/contacts/${userId}`);
         }
       })
-      .catch(err => console.error('Failed to restore profile from server:', err));
-
-    fetch(API_BASE_URL + `/api/contacts/${userId}`)
-      .then(res => res.json())
+      .then(res => res && res.json ? res.json() : null)
       .then(data => {
         if (Array.isArray(data)) {
           setContacts(data);
+          localStorage.setItem('smart_messenger_contacts_backup', JSON.stringify(data.map(c => c.id)));
         }
       })
-      .catch(err => console.error("Error fetching contacts:", err));
+      .catch(err => console.error('Failed to restore profile or contacts from server:', err));
 
     // Connect socket for real-time online status updates
     const socket = io(API_BASE_URL || undefined);
@@ -1757,6 +1825,7 @@ function Dashboard() {
         .then(data => {
           if (Array.isArray(data)) {
             setContacts(data);
+            localStorage.setItem('smart_messenger_contacts_backup', JSON.stringify(data.map(c => c.id)));
           }
         });
     })
@@ -2579,42 +2648,7 @@ function ChatDetail() {
     }
   };
 
-  // Debounced translation request
-  useEffect(() => {
-    clearTimeout(translationTimeoutRef.current);
-    if (!inputValue.trim()) {
-      setPreviewVisible(false);
-      setPreviewValue('');
-      return;
-    }
 
-    const isLiveTyping = localStorage.getItem('settings_live_typing') !== 'false';
-    if (!isLiveTyping) {
-      setPreviewVisible(false);
-      return;
-    }
-
-    setPreviewVisible(true);
-    setPreviewValue('Translating...');
-
-    translationTimeoutRef.current = setTimeout(() => {
-      fetch(API_BASE_URL + '/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: inputValue, fromLang: userLang, toLang: partnerLang })
-      })
-      .then(res => res.json())
-      .then(data => {
-        setPreviewValue(data.translatedText);
-      })
-      .catch(err => {
-        console.error(err);
-        setPreviewValue(`[${partnerLang.toUpperCase()}] ${inputValue}`);
-      });
-    }, 500);
-
-    return () => clearTimeout(translationTimeoutRef.current);
-  }, [inputValue, userLang, partnerLang]);
 
   // Send Message
   const handleSend = async (e) => {
@@ -2623,23 +2657,6 @@ function ChatDetail() {
     if (!textClean) return;
 
     setInputValue('');
-    setPreviewVisible(false);
-
-    // Get final translated text
-    let finalTranslation = previewValue;
-    if (!finalTranslation || finalTranslation === 'Translating...' || finalTranslation === '...') {
-      try {
-        const res = await fetch(API_BASE_URL + '/api/translate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: textClean, fromLang: userLang, toLang: partnerLang })
-        });
-        const data = await res.json();
-        finalTranslation = data.translatedText;
-      } catch {
-        finalTranslation = `[${partnerLang.toUpperCase()}] ${textClean}`;
-      }
-    }
 
     const now = new Date();
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -2649,19 +2666,19 @@ function ChatDetail() {
       id: msgId,
       userId,
       contactId,
-      translation: finalTranslation,
+      translation: textClean,
       original: textClean,
       time: timeStr
     };
 
-    // Emit via WebSocket to Server (which saves to DB & relays)
+    // Emit via WebSocket to Server (which saves to DB & translates for receiver)
     socketRef.current.emit('send_msg', msgPayload);
 
-    // Add locally to state immediately
+    // Add locally to state immediately — show original text only for sender
     setMessages(prev => [...prev, {
       id: msgId,
       sender: 'outgoing',
-      translation: finalTranslation,
+      translation: textClean,
       original: textClean,
       time: timeStr
     }]);
@@ -2747,8 +2764,14 @@ function ChatDetail() {
                 </div>
               ) : (
                 <>
-                  <span class="msg-translation-text">{m.translation}</span>
-                  <span class="msg-original-text">{m.original}</span>
+                  {m.sender === 'outgoing' ? (
+                    <span class="msg-translation-text">{m.original}</span>
+                  ) : (
+                    <>
+                      <span class="msg-translation-text">{m.translation}</span>
+                      <span class="msg-original-text">{m.original}</span>
+                    </>
+                  )}
                 </>
               )}
               <div class="msg-bubble-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: '0.5rem' }}>
@@ -2771,13 +2794,6 @@ function ChatDetail() {
 
       {/* Input controls */}
       <footer class="chat-input-section">
-        {previewVisible && (
-          <div class="translation-preview-balloon">
-            <span class="preview-tag">Translation Preview:</span>
-            <p class="preview-text">{previewValue}</p>
-            <div class="preview-balloon-arrow"></div>
-          </div>
-        )}
 
         <form onSubmit={handleSend} class="chat-input-controls">
           <div class="input-actions-left">

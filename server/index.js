@@ -74,7 +74,8 @@ const userSchema = new mongoose.Schema({
     age: { type: String, default: '' },
     photo: { type: String, default: '' },
     language: { type: String, default: 'en' },
-    contacts: [{ type: String, lowercase: true }]
+    contacts: [{ type: String, lowercase: true }],
+    isPlaceholder: { type: Boolean, default: false }
 });
 
 const MongoUser = useMongoDB ? mongoose.model('User', userSchema) : null;
@@ -125,12 +126,14 @@ async function dbFindUser(id) {
             age: doc.age,
             photo: doc.photo,
             language: doc.language || 'en',
-            contacts: doc.contacts || []
+            contacts: doc.contacts || [],
+            isPlaceholder: doc.isPlaceholder || false
         };
     } else {
         const db = await readDB();
         const user = db.users.find(u => u.id.toLowerCase() === cleanId);
         if (user && !user.language) user.language = 'en';
+        if (user && user.isPlaceholder === undefined) user.isPlaceholder = false;
         return user || null;
     }
 }
@@ -151,6 +154,7 @@ async function dbSaveUser(id, plainPassword, name, age, photo, language) {
             if (photo !== undefined) doc.photo = photo;
             if (plainPassword) doc.password = hashedPassword;
             if (language !== undefined) doc.language = language;
+            doc.isPlaceholder = false; // user is now fully registered
             await doc.save();
         } else {
             doc = new MongoUser({
@@ -160,7 +164,8 @@ async function dbSaveUser(id, plainPassword, name, age, photo, language) {
                 age: age || '',
                 photo: photo || '',
                 language: language || 'en',
-                contacts: []
+                contacts: [],
+                isPlaceholder: false
             });
             await doc.save();
         }
@@ -174,13 +179,14 @@ async function dbSaveUser(id, plainPassword, name, age, photo, language) {
     } else {
         const db = await readDB();
         const existingIndex = db.users.findIndex(u => u.id.toLowerCase() === cleanId);
-        const userProfile = existingIndex > -1 ? { ...db.users[existingIndex] } : { id: cleanId, contacts: [], language: 'en' };
+        const userProfile = existingIndex > -1 ? { ...db.users[existingIndex] } : { id: cleanId, contacts: [], language: 'en', isPlaceholder: false };
 
         if (name !== undefined) userProfile.name = name;
         if (age !== undefined) userProfile.age = age;
         if (photo !== undefined) userProfile.photo = photo;
         if (plainPassword) userProfile.password = hashedPassword;
         if (language !== undefined) userProfile.language = language;
+        userProfile.isPlaceholder = false; // user is now fully registered
 
         if (existingIndex > -1) {
             db.users[existingIndex] = userProfile;
@@ -202,42 +208,74 @@ async function dbAddContact(userId, contactId) {
     const uId = userId.trim().toLowerCase();
     const cId = contactId.trim().toLowerCase();
 
+    // Ensure contact user exists, otherwise create placeholder
+    let contactUser = await dbFindUser(cId);
+    if (!contactUser) {
+        const tempPass = await hashPassword('PlaceholderPass123!');
+        if (useMongoDB) {
+            const newDoc = new MongoUser({
+                id: cId,
+                password: tempPass,
+                name: cId.split('@')[0],
+                age: '',
+                photo: '',
+                language: 'en',
+                contacts: [uId],
+                isPlaceholder: true
+            });
+            await newDoc.save();
+        } else {
+            const db = await readDB();
+            db.users.push({
+                id: cId,
+                password: tempPass,
+                name: cId.split('@')[0],
+                age: '',
+                photo: '',
+                language: 'en',
+                contacts: [uId],
+                isPlaceholder: true
+            });
+            await writeDB(db);
+        }
+    }
+
     if (useMongoDB) {
         await MongoUser.updateOne({ id: uId }, { $addToSet: { contacts: cId } });
         await MongoUser.updateOne({ id: cId }, { $addToSet: { contacts: uId } });
         
-        const contactUser = await MongoUser.findOne({ id: cId });
+        const contactUserDoc = await MongoUser.findOne({ id: cId });
         return {
-            id: contactUser.id,
-            name: contactUser.name,
-            age: contactUser.age,
-            photo: contactUser.photo || '',
-            language: contactUser.language || 'en'
+            id: contactUserDoc.id,
+            name: contactUserDoc.name,
+            age: contactUserDoc.age,
+            photo: contactUserDoc.photo || '',
+            language: contactUserDoc.language || 'en'
         };
     } else {
         const db = await readDB();
         const user = db.users.find(u => u.id.toLowerCase() === uId);
-        const contactUser = db.users.find(u => u.id.toLowerCase() === cId);
+        const contactUserObj = db.users.find(u => u.id.toLowerCase() === cId);
 
-        if (!user || !contactUser) return null;
+        if (!user || !contactUserObj) return null;
 
         if (!user.contacts) user.contacts = [];
-        if (!user.contacts.includes(contactUser.id)) {
-            user.contacts.push(contactUser.id);
+        if (!user.contacts.includes(contactUserObj.id)) {
+            user.contacts.push(contactUserObj.id);
         }
 
-        if (!contactUser.contacts) contactUser.contacts = [];
-        if (!contactUser.contacts.includes(user.id)) {
-            contactUser.contacts.push(user.id);
+        if (!contactUserObj.contacts) contactUserObj.contacts = [];
+        if (!contactUserObj.contacts.includes(user.id)) {
+            contactUserObj.contacts.push(user.id);
         }
 
         await writeDB(db);
         return {
-            id: contactUser.id,
-            name: contactUser.name,
-            age: contactUser.age,
-            photo: contactUser.photo || '',
-            language: contactUser.language || 'en'
+            id: contactUserObj.id,
+            name: contactUserObj.name,
+            age: contactUserObj.age,
+            photo: contactUserObj.photo || '',
+            language: contactUserObj.language || 'en'
         };
     }
 }
@@ -481,7 +519,8 @@ app.post('/api/auth/check-user', async (req, res) => {
     if (!id) return res.status(400).json({ error: "Missing identifier" });
 
     const user = await dbFindUser(id);
-    res.json({ exists: !!user });
+    const exists = !!user && !user.isPlaceholder;
+    res.json({ exists });
 });
 
 // Send Custom Email OTP
@@ -597,13 +636,8 @@ app.post('/api/contacts/add', async (req, res) => {
     }
 
     const user = await dbFindUser(uId);
-    const contactUser = await dbFindUser(cId);
-
     if (!user) {
         return res.status(404).json({ error: "Current user session not found" });
-    }
-    if (!contactUser) {
-        return res.status(404).json({ error: "User with this identifier does not exist" });
     }
 
     const addedContact = await dbAddContact(uId, cId);
