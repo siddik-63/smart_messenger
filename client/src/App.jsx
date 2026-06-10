@@ -1465,6 +1465,9 @@ function Dashboard() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [activeModal, setActiveModal] = useState(null); // 'profile', 'settings', 'about'
   const [liveTyping, setLiveTyping] = useState(localStorage.getItem('settings_live_typing') !== 'false');
+  const [chatLang, setChatLang] = useState(localStorage.getItem('settings_chat_lang') || 'en');
+  const [activeChatLangDropdown, setActiveChatLangDropdown] = useState(false);
+  const [chatLangSearch, setChatLangSearch] = useState('');
 
   const [contacts, setContacts] = useState([]);
   const [newContactId, setNewContactId] = useState('');
@@ -2017,6 +2020,51 @@ function Dashboard() {
                       </div>
                       {TRANSLATION_LANGUAGES.filter(l => l.name.toLowerCase().includes(settingsLangSearch.toLowerCase())).map(l => (
                         <div key={l.code} onClick={() => { handleChangeUiLang(l.code); setActiveSettingsLangDropdown(false); }} style={{ padding: '0.6rem 1rem', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.02)' }} className="hover-bg-light">
+                          {l.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div class="settings-toggle-row" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                    <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-main)' }}>Chat Language</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Receive all messages in this language</span>
+                  </div>
+                </div>
+                
+                <div style={{ position: 'relative', width: '100%' }}>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setActiveChatLangDropdown(!activeChatLangDropdown); setChatLangSearch(''); }}
+                    style={{ width: '100%', padding: '0.6rem 0.75rem', background: '#111928', border: '1px solid var(--card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--text-main)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', fontWeight: 500 }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                       <i class="fa-solid fa-language" style={{ color: '#10b981' }}></i>
+                       <span>{TRANSLATION_LANGUAGES.find(l => l.code === chatLang)?.name || 'English'}</span>
+                    </div>
+                    <i class="fa-solid fa-chevron-down" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}></i>
+                  </button>
+                  {activeChatLangDropdown && (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, width: '100%', background: '#111928', border: '1px solid #10b981', borderRadius: 'var(--radius-sm)', marginTop: '0.5rem', zIndex: 100, maxHeight: '200px', overflowY: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+                      <div style={{ padding: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)', position: 'sticky', top: 0, background: '#111928' }}>
+                        <input type="text" placeholder="Search language..." value={chatLangSearch} onChange={(e) => setChatLangSearch(e.target.value)} onClick={(e) => e.stopPropagation()} style={{ width: '100%', padding: '0.5rem', background: 'rgba(255,255,255,0.05)', border: 'none', borderRadius: '4px', color: 'white', outline: 'none' }} />
+                      </div>
+                      {TRANSLATION_LANGUAGES.filter(l => l.name.toLowerCase().includes(chatLangSearch.toLowerCase())).map(l => (
+                        <div key={l.code} onClick={() => {
+                          setChatLang(l.code);
+                          localStorage.setItem('settings_chat_lang', l.code);
+                          setActiveChatLangDropdown(false);
+                          // Update server profile
+                          fetch(API_BASE_URL + '/api/auth/register', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id: userId, language: l.code })
+                          }).catch(err => console.error(err));
+                          globalShowToast('Chat Language', `All chats will now appear in ${l.name}`, 'normal');
+                        }} style={{ padding: '0.6rem 1rem', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.02)' }} className="hover-bg-light">
                           {l.name}
                         </div>
                       ))}
@@ -2654,20 +2702,11 @@ function ChatDetail() {
           </div>
         </div>
 
-        {/* Translation Pill */}
+        {/* Chat Language Info */}
         <div class="chat-header-center">
-          <div class="lang-selector-pill" style={{ padding: '0.35rem 0.75rem' }}>
+          <div class="lang-selector-pill" style={{ padding: '0.35rem 0.75rem', pointerEvents: 'none', opacity: 0.8 }}>
             <i class="fa-solid fa-language lang-arrow-icon" style={{ fontSize: '0.9rem', marginRight: '0.2rem' }}></i>
-            <select 
-              value={userLang} 
-              onChange={(e) => handleUserLangChange(e.target.value)} 
-              title="My Language"
-              style={{ fontSize: '0.85rem' }}
-            >
-              {TRANSLATION_LANGUAGES.map(l => (
-                <option key={l.code} value={l.code}>{l.name}</option>
-              ))}
-            </select>
+            <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>{TRANSLATION_LANGUAGES.find(l => l.code === userLang)?.name || 'English'}</span>
           </div>
         </div>
 
@@ -2682,7 +2721,6 @@ function ChatDetail() {
       {dropdownOpen && (
         <div class="options-dropdown-menu" id="chat-options-dropdown">
           <button class="btn-dropdown-item" onClick={handleClearChat}><i class="fa-regular fa-trash-can"></i> Clear Chat History</button>
-          <button class="btn-dropdown-item" onClick={() => { setUserLang(localStorage.getItem('settings_chat_lang') || localStorage.getItem('settings_ui_lang') || 'en'); setPartnerLang(contactUser?.language || 'en'); }}><i class="fa-solid fa-arrows-rotate"></i> Reset Languages</button>
         </div>
       )}
 
