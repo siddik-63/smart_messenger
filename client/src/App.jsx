@@ -850,16 +850,13 @@ function Step3Password() {
   }, [identifier]);
 
   const checks = {
-    length: password.length >= 8,
-    upper: /[A-Z]/.test(password),
-    number: /[0-9]/.test(password),
-    special: /[!@#$%^&*(),.?":{}|<>]/.test(password)
+    length: password.length >= 6
   };
 
   const handleNext = (e) => {
     e.preventDefault();
     if (!Object.values(checks).every(Boolean)) {
-      globalShowToast('Password Error', 'Password does not satisfy guidelines.', 'normal');
+      globalShowToast('Password Error', 'Password must be at least 6 characters.', 'normal');
       return;
     }
     if (password !== confirmPassword) {
@@ -876,14 +873,26 @@ function Step3Password() {
       const name = localStorage.getItem('onboarding_name') || 'Explorer';
       const age = localStorage.getItem('onboarding_age') || '25';
       const photo = localStorage.getItem('onboarding_photo') || '';
+      const cleanId = identifier.trim().toLowerCase();
 
-      fetch(API_BASE_URL + '/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: identifier, password, name, age, photo })
-      })
-      .then(() => navigate('/success'))
-      .catch(() => navigate('/success'));
+      sha256(password).then((hashedPassword) => {
+        const userRef = doc(db, 'users', cleanId);
+        setDoc(userRef, {
+          id: cleanId,
+          password: hashedPassword,
+          name,
+          age,
+          photo
+        }, { merge: true })
+        .then(() => {
+          localStorage.removeItem('onboarding_is_reset');
+          navigate('/success');
+        })
+        .catch((err) => {
+          console.error("Failed to reset password in Firestore:", err);
+          globalShowToast('Reset Error', 'Failed to save password.', 'normal');
+        });
+      });
     } else {
       navigate('/details');
     }
@@ -970,19 +979,7 @@ function Step3Password() {
               <ul class="checklist-list">
                 <li id="req-length" class={checks.length ? 'valid' : 'invalid'}>
                   <i className={`fa-solid ${checks.length ? 'fa-circle-check' : 'fa-circle-xmark'}`}></i>
-                  <span>At least 8 characters long</span>
-                </li>
-                <li id="req-upper" class={checks.upper ? 'valid' : 'invalid'}>
-                  <i className={`fa-solid ${checks.upper ? 'fa-circle-check' : 'fa-circle-xmark'}`}></i>
-                  <span>One uppercase letter (A-Z)</span>
-                </li>
-                <li id="req-number" class={checks.number ? 'valid' : 'invalid'}>
-                  <i className={`fa-solid ${checks.number ? 'fa-circle-check' : 'fa-circle-xmark'}`}></i>
-                  <span>One number (0-9)</span>
-                </li>
-                <li id="req-special" class={checks.special ? 'valid' : 'invalid'}>
-                  <i className={`fa-solid ${checks.special ? 'fa-circle-check' : 'fa-circle-xmark'}`}></i>
-                  <span>One special character (!@#$)</span>
+                  <span>At least 6 characters long</span>
                 </li>
               </ul>
             </div>
