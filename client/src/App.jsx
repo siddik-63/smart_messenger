@@ -1465,7 +1465,6 @@ function Dashboard() {
   const [search, setSearch] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [activeModal, setActiveModal] = useState(null); // 'profile', 'settings', 'about'
-  const [liveTyping, setLiveTyping] = useState(localStorage.getItem('settings_live_typing') !== 'false');
   const [chatLang, setChatLang] = useState(localStorage.getItem('settings_chat_lang') || 'en');
   const [activeChatLangDropdown, setActiveChatLangDropdown] = useState(false);
   const [chatLangSearch, setChatLangSearch] = useState('');
@@ -1824,12 +1823,7 @@ function Dashboard() {
     }
   };
 
-  const toggleLiveTyping = () => {
-    const nextVal = !liveTyping;
-    setLiveTyping(nextVal);
-    localStorage.setItem('settings_live_typing', nextVal ? 'true' : 'false');
-    globalShowToast("Settings Saved", `Live translation preview is now ${nextVal ? 'Enabled' : 'Disabled'}.`, "normal");
-  };
+
 
   const handleAddContact = (e) => {
     e.preventDefault();
@@ -2186,16 +2180,7 @@ function Dashboard() {
                 </label>
               </div>
               
-              <div class="settings-toggle-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
-                  <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-main)' }}>Live Typing Preview</span>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Translate text in real-time as you type</span>
-                </div>
-                <label class="switch">
-                  <input type="checkbox" checked={liveTyping} onChange={toggleLiveTyping} />
-                  <span class="slider"></span>
-                </label>
-              </div>
+
 
               <div class="settings-toggle-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.04)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-sm)' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
@@ -2807,9 +2792,14 @@ function ChatDetail() {
 
         {/* Chat Language Info */}
         <div class="chat-header-center">
-          <div class="lang-selector-pill" style={{ padding: '0.35rem 0.75rem', pointerEvents: 'none', opacity: 0.8 }}>
-            <i class="fa-solid fa-language lang-arrow-icon" style={{ fontSize: '0.9rem', marginRight: '0.2rem' }}></i>
-            <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>{TRANSLATION_LANGUAGES.find(l => l.code === userLang)?.name || 'English'}</span>
+          <div class="lang-selector-pill" style={{ padding: '0.35rem 0.65rem', pointerEvents: 'none', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1px' }}>
+            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', fontWeight: 500 }}>Receiving In</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+              <i class="fa-solid fa-language" style={{ fontSize: '0.8rem', color: 'var(--primary-blue)' }}></i>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                {TRANSLATION_LANGUAGES.find(l => l.code === userLang)?.name || 'English'}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -2832,7 +2822,7 @@ function ChatDetail() {
         <div class="chat-messages-scroll">
           <div class="system-message-bubble">
             <i class="fa-solid fa-lock"></i>
-            <span>Messages are translated in real-time. Typing translations will appear as a preview balloon above the input.</span>
+            <span>Messages are translated in real-time.</span>
           </div>
 
           {messages.map((m) => (
@@ -2854,7 +2844,12 @@ function ChatDetail() {
                     <span class="msg-translation-text">{m.original}</span>
                   ) : (
                     <>
-                      <span class="msg-translation-text">{m.translation}</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', width: '100%' }}>
+                        <span class="msg-translation-text" style={{ flex: 1 }}>{m.translation}</span>
+                        <span style={{ fontSize: '0.6rem', padding: '0.1rem 0.35rem', background: 'rgba(255,255,255,0.08)', borderRadius: '4px', color: 'rgba(255,255,255,0.5)', fontWeight: 600, textTransform: 'uppercase', height: 'fit-content', pointerEvents: 'none' }}>
+                          {userLang.toUpperCase()}
+                        </span>
+                      </div>
                       <span class="msg-original-text">{m.original}</span>
                     </>
                   )}
