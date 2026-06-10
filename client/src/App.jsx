@@ -33,6 +33,40 @@ async function translateText(text, fromLang, toLang) {
     }
 }
 
+// Image compression helper using HTML5 Canvas
+function compressImage(base64Str, maxWidth = 300, maxHeight = 300, quality = 0.6) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = base64Str;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
+
+      if (width > height) {
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+      } else {
+        if (height > maxHeight) {
+          width = Math.round((width * maxHeight) / height);
+          height = maxHeight;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => {
+      resolve(base64Str);
+    };
+  });
+}
+
 const TRANSLATION_LANGUAGES = [
   { code: 'hi', name: 'Hindi' },
   { code: 'bn', name: 'Bengali' },
@@ -1103,10 +1137,11 @@ function Step5Photo() {
         return;
       }
       const reader = new FileReader();
-      reader.onload = (evt) => {
+      reader.onload = async (evt) => {
         const url = evt.target.result;
-        setPhoto(url);
-        localStorage.setItem('onboarding_photo', url);
+        const compressedUrl = await compressImage(url, 200, 200, 0.6);
+        setPhoto(compressedUrl);
+        localStorage.setItem('onboarding_photo', compressedUrl);
         globalShowToast('Photo Loaded', 'Profile photo updated.', 'normal');
       };
       reader.readAsDataURL(file);
@@ -1142,7 +1177,7 @@ function Step5Photo() {
   };
 
   // Capture Canvas snapshots
-  const captureSnapshot = () => {
+  const captureSnapshot = async () => {
     if (!videoRef.current || !canvasRef.current) return;
     
     // Shutter flash animation
@@ -1158,8 +1193,9 @@ function Step5Photo() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
     const dataUrl = canvasRef.current.toDataURL('image/jpeg');
-    setPhoto(dataUrl);
-    localStorage.setItem('onboarding_photo', dataUrl);
+    const compressedUrl = await compressImage(dataUrl, 200, 200, 0.6);
+    setPhoto(compressedUrl);
+    localStorage.setItem('onboarding_photo', compressedUrl);
 
     stopCamera();
     globalShowToast('Snapshot Captured', 'Profile photo set successfully.', 'normal');
@@ -1333,24 +1369,23 @@ function Step6Language() {
     if (!identifier) navigate('/');
   }, [identifier]);
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
     localStorage.setItem('settings_ui_lang', uiLang);
     localStorage.setItem('settings_chat_lang', uiLang);
     document.cookie = `googtrans=/en/${uiLang}; path=/; domain=${window.location.hostname}`;
     document.cookie = `googtrans=/en/${uiLang}; path=/;`;
     
-    // Save language selection to backend database profile
-    const identifier = localStorage.getItem('onboarding_id');
-    fetch(API_BASE_URL + '/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: identifier, language: uiLang })
-    })
-    .finally(() => {
-      localStorage.setItem('smart_messenger_logged_in', 'true');
-      navigate('/dashboard');
-      setTimeout(() => window.location.reload(), 100);
-    });
+    // Save language selection to Firestore user document
+    const cleanId = identifier.trim().toLowerCase();
+    try {
+      await updateDoc(doc(db, 'users', cleanId), { language: uiLang });
+    } catch (err) {
+      console.error("Failed to update language in Firestore:", err);
+    }
+    
+    localStorage.setItem('smart_messenger_logged_in', 'true');
+    navigate('/dashboard');
+    setTimeout(() => window.location.reload(), 100);
   };
 
   return (
@@ -1658,8 +1693,9 @@ function Dashboard() {
         return;
       }
       const reader = new FileReader();
-      reader.onload = (evt) => {
-        setEditPhoto(evt.target.result);
+      reader.onload = async (evt) => {
+        const compressedUrl = await compressImage(evt.target.result, 200, 200, 0.6);
+        setEditPhoto(compressedUrl);
       };
       reader.readAsDataURL(file);
     }
@@ -2608,7 +2644,8 @@ function ChatDetail() {
 
     const reader = new FileReader();
     reader.onload = async () => {
-      const base64String = reader.result;
+      const rawBase64 = reader.result;
+      const base64String = await compressImage(rawBase64, 600, 600, 0.6);
       const now = new Date();
       const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const msgId = Math.random().toString(36).substring(2, 9);
