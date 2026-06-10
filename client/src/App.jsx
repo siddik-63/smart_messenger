@@ -2504,7 +2504,7 @@ function ChatDetail() {
     // Try Capacitor native speech recognition first (works on Android app)
     try {
       const permResult = await CapSpeechRecognition.requestPermissions();
-      if (permResult.speechRecognition === 'denied') {
+      if (permResult.speechRecognition !== 'granted') {
         globalShowToast("Microphone Blocked", "Please allow microphone access in your device settings.", "normal");
         return;
       }
@@ -2514,27 +2514,17 @@ function ChatDetail() {
         setIsListening(true);
         globalShowToast("Voice Recognition", `Listening in ${langName}...`, "normal");
 
-        CapSpeechRecognition.addListener('partialResults', (data) => {
-          if (data.matches && data.matches.length > 0) {
-            setInputValue(prev => prev ? prev + ' ' + data.matches[0] : data.matches[0]);
-          }
-        });
-
-        await CapSpeechRecognition.start({
-          language: langLocale,
-          maxResults: 3,
-          prompt: `Speak in ${langName}`,
-          partialResults: true,
-          popup: false
-        });
-
-        // Listen for results
+        // Listen for results (single start call)
         const result = await CapSpeechRecognition.start({
           language: langLocale,
           maxResults: 1,
+          prompt: `Speak in ${langName}`,
           partialResults: false,
           popup: false
-        }).catch(() => null);
+        }).catch((err) => {
+          console.error("Native speech recognition error:", err);
+          return null;
+        });
 
         setIsListening(false);
         CapSpeechRecognition.removeAllListeners();
