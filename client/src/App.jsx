@@ -1761,7 +1761,40 @@ function Dashboard() {
     };
   }, [userId]);
 
-  const filtered = contacts.filter(c =>
+  const getLocalSnippetAndTime = (contactId) => {
+    if (!userId) return null;
+    const roomKey = `chat_history_${userId.toLowerCase()}_${contactId.toLowerCase()}`;
+    const savedLocalMsgsStr = localStorage.getItem(roomKey);
+    if (savedLocalMsgsStr) {
+      try {
+        const msgs = JSON.parse(savedLocalMsgsStr);
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          const lastMsg = msgs[msgs.length - 1];
+          return {
+            snippet: lastMsg.image ? '[Image]' : lastMsg.translation || lastMsg.original,
+            time: lastMsg.time || ''
+          };
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return null;
+  };
+
+  const processedContacts = contacts.map(c => {
+    const localData = getLocalSnippetAndTime(c.id);
+    if (localData) {
+      return {
+        ...c,
+        snippet: localData.snippet,
+        time: localData.time
+      };
+    }
+    return c;
+  });
+
+  const filtered = processedContacts.filter(c =>
     (c.name && c.name.toLowerCase().includes(search.toLowerCase())) ||
     (c.snippet && c.snippet.toLowerCase().includes(search.toLowerCase())) ||
     (c.id && c.id.toLowerCase().includes(search.toLowerCase()))
@@ -2418,14 +2451,18 @@ function ChatDetail() {
       
       socketRef.current.emit('send_msg', msgPayload);
       
-      setMessages(prev => [...prev, {
-        id: msgId,
-        sender: 'outgoing',
-        translation: '[Image Shared]',
-        original: '[Image Shared]',
-        image: base64String,
-        time: timeStr
-      }]);
+      setMessages(prev => {
+        const next = [...prev, {
+          id: msgId,
+          sender: 'outgoing',
+          translation: '[Image Shared]',
+          original: '[Image Shared]',
+          image: base64String,
+          time: timeStr
+        }];
+        localStorage.setItem(`chat_history_${userId.toLowerCase()}_${contactId.toLowerCase()}`, JSON.stringify(next));
+        return next;
+      });
       
       setTimeout(scrollToBottom, 50);
     };
@@ -2438,7 +2475,11 @@ function ChatDetail() {
       const room = [userId.toLowerCase(), contactId.toLowerCase()].sort().join('_');
       fetch(API_BASE_URL + `/api/message/${room}/${msgId}`, { method: 'DELETE' })
         .then(() => {
-          setMessages(prev => prev.filter(m => m.id !== msgId));
+          setMessages(prev => {
+            const next = prev.filter(m => m.id !== msgId);
+            localStorage.setItem(`chat_history_${userId.toLowerCase()}_${contactId.toLowerCase()}`, JSON.stringify(next));
+            return next;
+          });
         })
         .catch(err => console.error(err));
     }
@@ -2586,10 +2627,28 @@ function ChatDetail() {
       return;
     }
 
+    // Load local history from localStorage immediately
+    const roomKey = `chat_history_${userId.toLowerCase()}_${contactId.toLowerCase()}`;
+    const savedLocalMsgsStr = localStorage.getItem(roomKey);
+    let localMsgs = [];
+    if (savedLocalMsgsStr) {
+      try {
+        localMsgs = JSON.parse(savedLocalMsgsStr);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    if (localMsgs.length > 0) {
+      setMessages(localMsgs);
+      setTimeout(scrollToBottom, 50);
+    }
+
     // Fetch initial chat logs from Server DB
     fetch(API_BASE_URL + `/api/messages/${userId}/${contactId}`)
       .then(res => res.json())
       .then(async (data) => {
+        if (!Array.isArray(data)) return;
+        
         // Translate incoming messages to user's language
         const myLang = localStorage.getItem('settings_chat_lang') || localStorage.getItem('settings_ui_lang') || 'en';
         const translatedData = await Promise.all(data.map(async (m) => {
@@ -2608,7 +2667,25 @@ function ChatDetail() {
           }
           return m;
         }));
-        setMessages(translatedData);
+        
+        // Merge backend messages with local messages, avoiding duplicates by message ID
+        setMessages(prev => {
+          const merged = [...prev];
+          translatedData.forEach(newMsg => {
+            if (!merged.some(m => m.id === newMsg.id)) {
+              merged.push(newMsg);
+            }
+          });
+          localStorage.setItem(roomKey, JSON.stringify(merged));
+          return merged;
+        });
+
+        // Delete unread messages from server after retrieval to save server space
+        if (data.length > 0) {
+          fetch(API_BASE_URL + `/api/messages/${userId}/${contactId}`, { method: 'DELETE' })
+            .catch(err => console.error("Failed to clear read messages on server:", err));
+        }
+
         setTimeout(scrollToBottom, 200);
       })
       .catch(err => console.error(err));
@@ -2619,7 +2696,11 @@ function ChatDetail() {
 
     // Listeners
     socketRef.current.on('receive_msg', (msg) => {
-      setMessages(prev => [...prev, msg]);
+      setMessages(prev => {
+        const next = [...prev, msg];
+        localStorage.setItem(`chat_history_${userId.toLowerCase()}_${contactId.toLowerCase()}`, JSON.stringify(next));
+        return next;
+      });
       setTimeout(scrollToBottom, 50);
     });
 
@@ -2675,13 +2756,17 @@ function ChatDetail() {
     socketRef.current.emit('send_msg', msgPayload);
 
     // Add locally to state immediately — show original text only for sender
-    setMessages(prev => [...prev, {
-      id: msgId,
-      sender: 'outgoing',
-      translation: textClean,
-      original: textClean,
-      time: timeStr
-    }]);
+    setMessages(prev => {
+      const next = [...prev, {
+        id: msgId,
+        sender: 'outgoing',
+        translation: textClean,
+        original: textClean,
+        time: timeStr
+      }];
+      localStorage.setItem(`chat_history_${userId.toLowerCase()}_${contactId.toLowerCase()}`, JSON.stringify(next));
+      return next;
+    });
 
     setTimeout(scrollToBottom, 50);
   };
@@ -2691,6 +2776,7 @@ function ChatDetail() {
       fetch(API_BASE_URL + `/api/messages/${userId}/${contactId}`, { method: 'DELETE' })
         .then(() => {
           setMessages([]);
+          localStorage.removeItem(`chat_history_${userId.toLowerCase()}_${contactId.toLowerCase()}`);
           globalShowToast("Clear History", "Chat history deleted successfully.", "normal");
         });
     }
