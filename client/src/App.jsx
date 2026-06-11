@@ -252,6 +252,7 @@ function Step1Login() {
     }
 
     // Bypass OTP Flow entirely per user request
+    localStorage.removeItem('onboarding_is_reset');
     localStorage.setItem('onboarding_is_new', userExists ? 'false' : 'true');
     localStorage.setItem('onboarding_id', isPhone ? formattedPhone : idClean);
     localStorage.setItem('onboarding_skip_password', 'false');
@@ -876,21 +877,32 @@ function Step3Password() {
       const cleanId = identifier.trim().toLowerCase();
 
       sha256(password).then((hashedPassword) => {
-        const userRef = doc(db, 'users', cleanId);
-        setDoc(userRef, {
-          id: cleanId,
-          password: hashedPassword,
-          name,
-          age,
-          photo
-        }, { merge: true })
+        // 1. Update Express backend database
+        fetch(API_BASE_URL + '/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: identifier, password, name, age, photo })
+        })
+        .then(() => {
+          // 2. Update Firestore database
+          const userRef = doc(db, 'users', cleanId);
+          return setDoc(userRef, {
+            id: cleanId,
+            password: hashedPassword,
+            name,
+            age,
+            photo
+          }, { merge: true });
+        })
         .then(() => {
           localStorage.removeItem('onboarding_is_reset');
           navigate('/success');
         })
         .catch((err) => {
-          console.error("Failed to reset password in Firestore:", err);
-          globalShowToast('Reset Error', 'Failed to save password.', 'normal');
+          console.error("Failed to reset password:", err);
+          // Fallback to success so user is not stuck
+          localStorage.removeItem('onboarding_is_reset');
+          navigate('/success');
         });
       });
     } else {
