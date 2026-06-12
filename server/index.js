@@ -57,21 +57,18 @@ async function writeDB(db) {
 // -----------------------------------------------------------------
 const useMongoDB = !!process.env.MONGODB_URI;
 const admin = require('firebase-admin');
-const { getDatabase } = require('firebase-admin/database');
+const { getFirestore } = require('firebase-admin/firestore');
 
 let db = null;
 let useFirebase = false;
-
-const firebaseDbUrl = process.env.FIREBASE_DATABASE_URL || 'https://smart-translator-96369-default-rtdb.firebaseio.com';
 
 try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
         console.log("Initializing Firebase Admin using FIREBASE_SERVICE_ACCOUNT_JSON...");
         admin.initializeApp({
-            credential: admin.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)),
-            databaseURL: firebaseDbUrl
+            credential: admin.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON))
         });
-        db = getDatabase();
+        db = getFirestore();
         useFirebase = true;
     } else {
         const saPath = path.join(__dirname, 'firebase-service-account.json');
@@ -79,10 +76,9 @@ try {
         if (fsSync.existsSync(saPath)) {
             console.log("Initializing Firebase Admin using firebase-service-account.json...");
             admin.initializeApp({
-                credential: admin.cert(require(saPath)),
-                databaseURL: firebaseDbUrl
+                credential: admin.cert(require(saPath))
             });
-            db = getDatabase();
+            db = getFirestore();
             useFirebase = true;
         } else {
             console.warn("\n========================================================");
@@ -103,7 +99,7 @@ if (useMongoDB) {
         .then(() => console.log("Connected to MongoDB Atlas successfully"))
         .catch(err => console.error("MongoDB Connection Error:", err));
 } else if (useFirebase) {
-    console.log("Using Firebase Realtime Database at URL:", firebaseDbUrl);
+    console.log("Using Firebase Cloud Firestore");
 } else {
     console.log("Using local db.json database file");
 }
@@ -183,21 +179,23 @@ async function dbFindUser(id) {
         };
     } else if (useFirebase && db) {
         try {
-            const escId = escapeFirebaseKey(cleanId);
-            const snapshot = await db.ref(`users/${escId}`).once('value');
-            const doc = snapshot.val();
-            if (!doc) return null;
+            const docRef = db.collection('users').doc(cleanId);
+            const docSnap = await docRef.get();
+            if (!docSnap.exists) return null;
             
-            const contacts = doc.contacts ? Object.keys(doc.contacts) : [];
+            const userData = docSnap.data();
+            const contactsSnap = await docRef.collection('contacts').get();
+            const contactsList = contactsSnap.docs.map(d => d.id);
+            
             return {
-                id: doc.id,
-                password: doc.password,
-                name: doc.name || '',
-                age: doc.age || '',
-                photo: doc.photo || '',
-                language: doc.language || 'en',
-                contacts: contacts,
-                isPlaceholder: doc.isPlaceholder || false
+                id: userData.id || cleanId,
+                password: userData.password || '',
+                name: userData.name || '',
+                age: userData.age || '',
+                photo: userData.photo || '',
+                language: userData.language || 'en',
+                contacts: contactsList,
+                isPlaceholder: userData.isPlaceholder || false
             };
         } catch (err) {
             console.error(`Firebase error finding user ${id}:`, err);
@@ -252,10 +250,9 @@ async function dbSaveUser(id, plainPassword, name, age, photo, language) {
         };
     } else if (useFirebase && db) {
         try {
-            const escId = escapeFirebaseKey(cleanId);
-            const userRef = db.ref(`users/${escId}`);
-            const snapshot = await userRef.once('value');
-            const existing = snapshot.val() || {};
+            const docRef = db.collection('users').doc(cleanId);
+            const docSnap = await docRef.get();
+            const existing = docSnap.exists ? docSnap.data() : {};
             
             const updates = {};
             if (name !== undefined) updates.name = name;
@@ -267,17 +264,14 @@ async function dbSaveUser(id, plainPassword, name, age, photo, language) {
             
             if (!existing.id) updates.id = cleanId;
 
-            await userRef.update(updates);
-            
-            const updatedSnapshot = await userRef.once('value');
-            const updatedDoc = updatedSnapshot.val();
+            await docRef.set(updates, { merge: true });
             
             return {
-                id: updatedDoc.id,
-                name: updatedDoc.name || '',
-                age: updatedDoc.age || '',
-                photo: updatedDoc.photo || '',
-                language: updatedDoc.language || 'en'
+                id: cleanId,
+                name: updates.name !== undefined ? updates.name : (existing.name || ''),
+                age: updates.age !== undefined ? updates.age : (existing.age || ''),
+                photo: updates.photo !== undefined ? updates.photo : (existing.photo || ''),
+                language: updates.language !== undefined ? updates.language : (existing.language || 'en')
             };
         } catch (err) {
             console.error(`Firebase error saving user ${id}:`, err);
@@ -333,16 +327,14 @@ async function dbAddContact(userId, contactId) {
             await newDoc.save();
         } else if (useFirebase && db) {
             try {
-                const escCId = escapeFirebaseKey(cId);
-                const escUId = escapeFirebaseKey(uId);
-                await db.ref(`users/${escCId}`).set({
+                const docRef = db.collection('users').doc(cId);
+                await docRef.set({
                     id: cId,
                     password: tempPass,
                     name: cId.split('@')[0],
                     age: '',
                     photo: '',
                     language: 'en',
-                    contacts: { [escUId]: true },
                     isPlaceholder: true
                 });
             } catch (err) {
@@ -378,11 +370,8 @@ async function dbAddContact(userId, contactId) {
         };
     } else if (useFirebase && db) {
         try {
-            const escUId = escapeFirebaseKey(uId);
-            const escCId = escapeFirebaseKey(cId);
-            
-            await db.ref(`users/${escUId}/contacts/${escCId}`).set(true);
-            await db.ref(`users/${escCId}/contacts/${escUId}`).set(true);
+            await db.collection('users').doc(uId).collection('contacts').doc(cId).set({ addedAt: Date.now() });
+            await db.collection('users').doc(cId).collection('contacts').doc(uId).set({ addedAt: Date.now() });
             
             const contactUserDoc = await dbFindUser(cId);
             return {
@@ -433,10 +422,8 @@ async function dbDeleteContact(userId, contactId) {
         await MongoUser.updateOne({ id: cId }, { $pull: { contacts: uId } });
     } else if (useFirebase && db) {
         try {
-            const escUId = escapeFirebaseKey(uId);
-            const escCId = escapeFirebaseKey(cId);
-            await db.ref(`users/${escUId}/contacts/${escCId}`).remove();
-            await db.ref(`users/${escCId}/contacts/${escUId}`).remove();
+            await db.collection('users').doc(uId).collection('contacts').doc(cId).delete();
+            await db.collection('users').doc(cId).collection('contacts').doc(uId).delete();
         } catch (err) {
             console.error("Firebase error deleting contact:", err);
         }
@@ -489,21 +476,17 @@ async function dbGetContacts(userId) {
             
             const contactsList = [];
             const contactIds = user.contacts || [];
-            const escUId = escapeFirebaseKey(uId);
 
             for (const cId of contactIds) {
                 const contactUser = await dbFindUser(cId);
                 if (contactUser) {
-                    const escCId = escapeFirebaseKey(cId);
-                    const roomKey = [escUId, escCId].sort().join('_');
+                    const roomKey = [uId, cId].sort().join('_');
                     
-                    const msgQuery = db.ref(`messages/${roomKey}`).orderByChild('timestamp').limitToLast(1);
-                    const msgSnapshot = await msgQuery.once('value');
-                    const msgs = msgSnapshot.val();
+                    const lastMsgSnap = await db.collection('chats').doc(roomKey).collection('messages')
+                        .orderBy('timestamp', 'desc').limit(1).get();
                     let lastMsg = null;
-                    if (msgs) {
-                        const keys = Object.keys(msgs);
-                        lastMsg = msgs[keys[0]];
+                    if (!lastMsgSnap.empty) {
+                        lastMsg = lastMsgSnap.docs[0].data();
                     }
                     
                     contactsList.push({
@@ -572,15 +555,11 @@ async function dbGetMessages(userId, contactId) {
         }));
     } else if (useFirebase && db) {
         try {
-            const escUId = escapeFirebaseKey(uId);
-            const escCId = escapeFirebaseKey(cId);
-            const escRoomKey = [escUId, escCId].sort().join('_');
+            const msgsSnap = await db.collection('chats').doc(roomKey).collection('messages')
+                .orderBy('timestamp', 'asc').get();
             
-            const snapshot = await db.ref(`messages/${escRoomKey}`).orderByChild('timestamp').once('value');
-            const val = snapshot.val() || {};
-            
-            const list = Object.keys(val).map(key => {
-                const msg = val[key];
+            return msgsSnap.docs.map(doc => {
+                const msg = doc.data();
                 return {
                     id: msg.id,
                     sender: msg.senderId === uId ? 'outgoing' : 'incoming',
@@ -592,8 +571,6 @@ async function dbGetMessages(userId, contactId) {
                     timestamp: msg.timestamp
                 };
             });
-            list.sort((a, b) => a.timestamp - b.timestamp);
-            return list;
         } catch (err) {
             console.error("Firebase error getting messages:", err);
             return [];
@@ -632,9 +609,6 @@ async function dbSaveMessage(userId, contactId, translation, original, time, ima
         await newMessage.save();
     } else if (useFirebase && db) {
         try {
-            const escUId = escapeFirebaseKey(uId);
-            const escCId = escapeFirebaseKey(cId);
-            const escRoomKey = [escUId, escCId].sort().join('_');
             const messageObject = {
                 id: msgId,
                 senderId: uId,
@@ -644,7 +618,12 @@ async function dbSaveMessage(userId, contactId, translation, original, time, ima
                 image: image || '',
                 timestamp: Date.now()
             };
-            await db.ref(`messages/${escRoomKey}/${msgId}`).set(messageObject);
+            await db.collection('chats').doc(roomKey).collection('messages').doc(msgId).set(messageObject);
+            await db.collection('chats').doc(roomKey).set({
+                participants: [uId, cId],
+                lastMessage: { text: image ? '[Image Shared]' : translation, time, senderId: uId },
+                updatedAt: Date.now()
+            }, { merge: true });
         } catch (err) {
             console.error("Firebase error saving message:", err);
         }
@@ -675,10 +654,12 @@ async function dbClearMessages(userId, contactId) {
         await MongoMessage.deleteMany({ room: roomKey });
     } else if (useFirebase && db) {
         try {
-            const escUId = escapeFirebaseKey(uId);
-            const escCId = escapeFirebaseKey(cId);
-            const escRoomKey = [escUId, escCId].sort().join('_');
-            await db.ref(`messages/${escRoomKey}`).remove();
+            const msgsSnap = await db.collection('chats').doc(roomKey).collection('messages').get();
+            const batch = db.batch();
+            msgsSnap.docs.forEach(doc => {
+                batch.delete(doc.ref);
+            });
+            await batch.commit();
         } catch (err) {
             console.error("Firebase error clearing messages:", err);
         }
@@ -694,7 +675,7 @@ async function dbDeleteMessage(room, id) {
         await MongoMessage.deleteOne({ room, id });
     } else if (useFirebase && db) {
         try {
-            await db.ref(`messages/${room}/${id}`).remove();
+            await db.collection('chats').doc(room).collection('messages').doc(id).delete();
         } catch (err) {
             console.error("Firebase error deleting message:", err);
         }
