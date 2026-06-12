@@ -2145,3 +2145,147 @@ input:checked + .slider:before {
     transform: translateX(20px);
 }
 
+/* =================================================================
+   WHATSAPP STYLE PROFILE PICTURE PREVIEW & GALLERY
+   ================================================================= */
+.wp-preview-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 10100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wp-preview-card {
+    background: rgba(17, 25, 40, 0.95);
+    border: 1px solid var(--card-border);
+    box-shadow: var(--card-shadow);
+    border-radius: 12px;
+    width: 250px;
+    position: relative;
+    z-index: 10101;
+    overflow: hidden;
+    animation: scaleUpCard 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes scaleUpCard {
+    from {
+        transform: scale(0.85);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.wp-preview-header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 0.6rem 0.8rem;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
+    color: white;
+    font-size: 0.95rem;
+    font-weight: 600;
+    z-index: 10;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.wp-preview-img-container {
+    width: 250px;
+    height: 250px;
+    background: #0d121f;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    cursor: pointer;
+}
+
+.wp-preview-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.wp-preview-placeholder {
+    font-size: 6rem;
+    color: rgba(255,255,255,0.15);
+}
+
+.wp-preview-actions {
+    display: flex;
+    background: rgba(10, 15, 30, 0.98);
+    height: 48px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+}
+
+.wp-preview-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--primary-blue);
+    font-size: 1.15rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s, color 0.2s;
+    outline: none;
+}
+
+.wp-preview-btn:hover {
+    background: rgba(255,255,255,0.04);
+    color: var(--primary-blue-glow);
+}
+
+/* Gallery Navigation styles */
+.gallery-nav-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: white;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    transition: background 0.2s, transform 0.2s;
+    outline: none;
+    z-index: 20;
+}
+
+.gallery-nav-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+}
+
+.gallery-nav-btn:active {
+    transform: scale(0.95);
+}
+
+.gallery-nav-btn.prev {
+    position: absolute;
+    left: 1rem;
+}
+
+.gallery-nav-btn.next {
+    position: absolute;
+    right: 1rem;
+}
+
+.gallery-rotation-container {
+    transition: transform 0.3s ease;
+}
+
+

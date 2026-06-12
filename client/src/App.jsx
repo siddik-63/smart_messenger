@@ -132,11 +132,34 @@ const TRANSLATION_LANGUAGES = [
   { code: 'pt', name: 'Portuguese' },
 ];
 
+// Language locale map for speech recognition
+const LANG_LOCALE_MAP = {
+  'hi': 'hi-IN', 'bn': 'bn-IN', 'te': 'te-IN', 'ta': 'ta-IN',
+  'mr': 'mr-IN', 'gu': 'gu-IN', 'kn': 'kn-IN', 'ml': 'ml-IN',
+  'ur': 'ur-IN', 'pa': 'pa-IN', 'or': 'or-IN',
+  'ja': 'ja-JP', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE',
+  'zh': 'zh-CN', 'ru': 'ru-RU', 'ko': 'ko-KR', 'ar': 'ar-SA',
+  'it': 'it-IT', 'pt': 'pt-BR', 'en': 'en-US'
+};
+
 // Global toast notifier helper
 let globalShowToast = () => {};
 
 export default function App() {
   const [toast, setToast] = useState(null);
+
+  // Gallery and preview states
+  const [globalLightboxImages, setGlobalLightboxImages] = useState([]);
+  const [globalLightboxIndex, setGlobalLightboxIndex] = useState(0);
+  const [globalLightboxZoom, setGlobalLightboxZoom] = useState(1);
+  const [globalLightboxPos, setGlobalLightboxPos] = useState({ x: 0, y: 0 });
+  const [globalLightboxRotation, setGlobalLightboxRotation] = useState(0);
+
+  const [selectedContactPreview, setSelectedContactPreview] = useState(null);
+  const [selectedContactProfile, setSelectedContactProfile] = useState(null);
+
+  const touchStartRef = useRef({ distance: 0, zoom: 1, pos: { x: 0, y: 0 } });
+  const mouseStartRef = useRef({ dragging: false, x: 0, y: 0 });
 
   const showToast = (title, message, type = 'normal') => {
     setToast({ title, message, type });
@@ -145,15 +168,117 @@ export default function App() {
     }, 6000);
   };
 
+  const navigate = useNavigate();
+
   useEffect(() => {
     globalShowToast = showToast;
     // Set root document language for keyboard/OS localization
     const savedLang = localStorage.getItem('settings_ui_lang') || 'en';
     document.documentElement.lang = savedLang;
+
+    // Set up global triggers
+    window.showGlobalLightbox = (images, index = 0) => {
+      const imgs = Array.isArray(images) ? images : [images];
+      setGlobalLightboxImages(imgs);
+      setGlobalLightboxIndex(index);
+      setGlobalLightboxZoom(1);
+      setGlobalLightboxPos({ x: 0, y: 0 });
+      setGlobalLightboxRotation(0);
+    };
+
+    window.showContactPreview = (contact) => {
+      setSelectedContactPreview(contact);
+    };
+
+    window.showContactProfile = (contact) => {
+      setSelectedContactProfile(contact);
+    };
   }, []);
 
+  // Keyboard navigation for global lightbox
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (globalLightboxImages.length === 0) return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setGlobalLightboxIndex(prev => (prev > 0 ? prev - 1 : globalLightboxImages.length - 1));
+        setGlobalLightboxZoom(1);
+        setGlobalLightboxPos({ x: 0, y: 0 });
+        setGlobalLightboxRotation(0);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setGlobalLightboxIndex(prev => (prev < globalLightboxImages.length - 1 ? prev + 1 : 0));
+        setGlobalLightboxZoom(1);
+        setGlobalLightboxPos({ x: 0, y: 0 });
+        setGlobalLightboxRotation(0);
+      } else if (e.key === 'Escape') {
+        setGlobalLightboxImages([]);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [globalLightboxImages]);
+
+  // Touch event handlers for pinch-to-zoom and pan
+  const handleTouchStart = (e) => {
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      touchStartRef.current.distance = dist;
+      touchStartRef.current.zoom = globalLightboxZoom;
+    } else if (e.touches.length === 1) {
+      touchStartRef.current.pos = {
+        x: e.touches[0].clientX - globalLightboxPos.x,
+        y: e.touches[0].clientY - globalLightboxPos.y
+      };
+    }
+  };
+
+  const handleTouchMove = (e) => {
+    if (e.touches.length === 2 && touchStartRef.current.distance > 0) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const scale = dist / touchStartRef.current.distance;
+      const newZoom = Math.max(0.5, Math.min(4, touchStartRef.current.zoom * scale));
+      setGlobalLightboxZoom(newZoom);
+    } else if (e.touches.length === 1 && globalLightboxZoom > 1) {
+      const x = e.touches[0].clientX - touchStartRef.current.pos.x;
+      const y = e.touches[0].clientY - touchStartRef.current.pos.y;
+      setGlobalLightboxPos({ x, y });
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchStartRef.current.distance = 0;
+  };
+
+  // Mouse event handlers for desktop dragging
+  const handleMouseDown = (e) => {
+    if (globalLightboxZoom > 1) {
+      mouseStartRef.current.dragging = true;
+      mouseStartRef.current.x = e.clientX - globalLightboxPos.x;
+      mouseStartRef.current.y = e.clientY - globalLightboxPos.y;
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    if (mouseStartRef.current.dragging && globalLightboxZoom > 1) {
+      const x = e.clientX - mouseStartRef.current.x;
+      const y = e.clientY - mouseStartRef.current.y;
+      setGlobalLightboxPos({ x, y });
+    }
+  };
+
+  const handleMouseUp = () => {
+    mouseStartRef.current.dragging = false;
+  };
+
   return (
-    <BrowserRouter>
+    <>
       <div className="glass-bg"></div>
       
       {/* Toast Alert Element */}
@@ -183,7 +308,303 @@ export default function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/chat/:contactId" element={<ChatDetail />} />
       </Routes>
-    </BrowserRouter>
+
+      {/* Global Image Gallery Lightbox */}
+      {globalLightboxImages.length > 0 && (() => {
+        const currentImg = globalLightboxImages[globalLightboxIndex];
+        return (
+          <div 
+            style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(5,7,12,0.94)', zIndex: 10200, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(10px)', userSelect: 'none' }}
+            onClick={() => setGlobalLightboxImages([])}
+          >
+            {/* Top controls bar */}
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem 1.5rem', zIndex: 10300 }}>
+              <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.85rem', fontWeight: 600 }}>
+                <i className="fa-regular fa-image" style={{ marginRight: '0.5rem', color: 'var(--primary-blue)' }}></i> 
+                {globalLightboxImages.length > 1 ? `Image ${globalLightboxIndex + 1} of ${globalLightboxImages.length}` : 'Image Preview'}
+              </span>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                {/* Rotate button */}
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setGlobalLightboxRotation(r => (r + 90) % 360); }}
+                  style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.95rem' }}
+                  title="Rotate Clockwise"
+                >
+                  <i className="fa-solid fa-rotate-right"></i>
+                </button>
+                {/* Zoom Out */}
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setGlobalLightboxZoom(z => Math.max(0.5, z - 0.25)); }}
+                  style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.05rem' }}
+                  title="Zoom Out"
+                >
+                  <i className="fa-solid fa-minus"></i>
+                </button>
+                <span style={{ color: 'white', fontSize: '0.8rem', minWidth: '40px', textAlign: 'center', fontWeight: 600 }}>{Math.round(globalLightboxZoom * 100)}%</span>
+                {/* Zoom In */}
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setGlobalLightboxZoom(z => Math.min(4, z + 0.25)); }}
+                  style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.05rem' }}
+                  title="Zoom In"
+                >
+                  <i className="fa-solid fa-plus"></i>
+                </button>
+                {/* Reset Zoom */}
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setGlobalLightboxZoom(1); setGlobalLightboxPos({ x: 0, y: 0 }); setGlobalLightboxRotation(0); }}
+                  style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem' }}
+                  title="Reset View"
+                >
+                  <i className="fa-solid fa-arrows-rotate"></i>
+                </button>
+                {/* Download */}
+                {currentImg && (
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); const a = document.createElement('a'); a.href = currentImg; a.download = 'messenger-photo.png'; a.click(); }}
+                    style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem' }}
+                    title="Download Image"
+                  >
+                    <i className="fa-solid fa-download"></i>
+                  </button>
+                )}
+                {/* Close */}
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setGlobalLightboxImages([]); }}
+                  style={{ background: 'rgba(239,68,68,0.2)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.05rem' }}
+                  title="Close Viewer"
+                >
+                  <i className="fa-solid fa-xmark"></i>
+                </button>
+              </div>
+            </div>
+
+            {/* Left and Right navigation arrows */}
+            {globalLightboxImages.length > 1 && (
+              <>
+                <button 
+                  className="gallery-nav-btn prev"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setGlobalLightboxIndex(prev => (prev > 0 ? prev - 1 : globalLightboxImages.length - 1));
+                    setGlobalLightboxZoom(1);
+                    setGlobalLightboxPos({ x: 0, y: 0 });
+                    setGlobalLightboxRotation(0);
+                  }}
+                  title="Previous Image"
+                >
+                  <i className="fa-solid fa-chevron-left"></i>
+                </button>
+                <button 
+                  className="gallery-nav-btn next"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setGlobalLightboxIndex(prev => (prev < globalLightboxImages.length - 1 ? prev + 1 : 0));
+                    setGlobalLightboxZoom(1);
+                    setGlobalLightboxPos({ x: 0, y: 0 });
+                    setGlobalLightboxRotation(0);
+                  }}
+                  title="Next Image"
+                >
+                  <i className="fa-solid fa-chevron-right"></i>
+                </button>
+              </>
+            )}
+
+            {/* Image frame */}
+            <div 
+              style={{ overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', outline: 'none' }}
+              onClick={(e) => e.stopPropagation()}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+            >
+              {currentImg ? (
+                <div 
+                  className="gallery-rotation-container"
+                  style={{ 
+                    transform: `rotate(${globalLightboxRotation}deg)`,
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center' 
+                  }}
+                >
+                  <img 
+                    src={currentImg} 
+                    alt="Gallery View" 
+                    style={{ 
+                      transform: `translate(${globalLightboxPos.x}px, ${globalLightboxPos.y}px) scale(${globalLightboxZoom})`, 
+                      transition: touchStartRef.current.distance > 0 || mouseStartRef.current.dragging ? 'none' : 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)', 
+                      maxWidth: '90vw', 
+                      maxHeight: '80vh', 
+                      borderRadius: '8px', 
+                      boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
+                      objectFit: 'contain',
+                      cursor: globalLightboxZoom > 1 ? 'grab' : 'zoom-in'
+                    }} 
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      setGlobalLightboxZoom(z => z >= 2.5 ? 1 : 2.5); 
+                      setGlobalLightboxPos({ x: 0, y: 0 }); 
+                    }}
+                    draggable={false}
+                  />
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', color: 'var(--text-muted)' }}>
+                  <i className="fa-solid fa-user-slash" style={{ fontSize: '4.5rem', opacity: 0.3 }}></i>
+                  <span style={{ fontSize: '0.85rem' }}>No Photo Set</span>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* WhatsApp-Style Contact Preview Popup */}
+      {selectedContactPreview && (
+        <div className="wp-preview-modal">
+          <div 
+            className="custom-modal-backdrop" 
+            style={{ background: 'rgba(3, 5, 10, 0.65)' }} 
+            onClick={() => setSelectedContactPreview(null)}
+          ></div>
+          <div className="wp-preview-card">
+            {/* Header overlay */}
+            <div className="wp-preview-header">
+              {selectedContactPreview.name || selectedContactPreview.id}
+            </div>
+            
+            {/* Main square image */}
+            <div 
+              className="wp-preview-img-container"
+              onClick={() => {
+                const photo = selectedContactPreview.photo;
+                setSelectedContactPreview(null);
+                window.showGlobalLightbox(photo);
+              }}
+              title="Click to expand"
+            >
+              {selectedContactPreview.photo ? (
+                <img 
+                  src={selectedContactPreview.photo} 
+                  alt="Contact Preview" 
+                  className="wp-preview-img" 
+                />
+              ) : (
+                <i className="fa-solid fa-user wp-preview-placeholder"></i>
+              )}
+            </div>
+            
+            {/* Action buttons footer */}
+            <div className="wp-preview-actions">
+              {/* Message chat button */}
+              <button 
+                className="wp-preview-btn" 
+                onClick={() => {
+                  const id = selectedContactPreview.id;
+                  setSelectedContactPreview(null);
+                  navigate(`/chat/${id}`);
+                }}
+                title="Send Message"
+              >
+                <i className="fa-solid fa-comment-dots"></i>
+              </button>
+              
+              {/* View profile button */}
+              <button 
+                className="wp-preview-btn" 
+                onClick={() => {
+                  const contact = selectedContactPreview;
+                  setSelectedContactPreview(null);
+                  setSelectedContactProfile(contact);
+                }}
+                title="View Profile Info"
+              >
+                <i className="fa-solid fa-circle-info"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Contact Profile Details Modal */}
+      {selectedContactProfile && (
+        <div className="custom-modal">
+          <div className="custom-modal-backdrop" onClick={() => setSelectedContactProfile(null)}></div>
+          <div className="custom-modal-card">
+            <div className="custom-modal-header">
+              <h3>Contact Profile</h3>
+              <button className="btn-close-modal" onClick={() => setSelectedContactProfile(null)}>
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+            <div className="custom-modal-body">
+              <div 
+                className="profile-modal-avatar-wrapper"
+                style={{ cursor: selectedContactProfile.photo ? 'pointer' : 'default' }}
+                onClick={() => {
+                  if (selectedContactProfile.photo) {
+                    window.showGlobalLightbox(selectedContactProfile.photo);
+                  }
+                }}
+                title={selectedContactProfile.photo ? "Click to view full photo" : ""}
+              >
+                {selectedContactProfile.photo ? (
+                  <img src={selectedContactProfile.photo} alt="Avatar" className="profile-modal-avatar" />
+                ) : (
+                  <i className="fa-solid fa-circle-user profile-modal-fallback" style={{ fontSize: '7rem', color: 'var(--text-muted)' }}></i>
+                )}
+              </div>
+              
+              <div className="info-item">
+                <span className="info-item-label">Full Name</span>
+                <span className="info-item-value" style={{ color: 'white', fontWeight: 600 }}>{selectedContactProfile.name}</span>
+              </div>
+              
+              <div className="info-item">
+                <span className="info-item-label">User ID / Username</span>
+                <span className="info-item-value" style={{ color: 'var(--primary-blue)', fontSize: '0.8rem' }}>{selectedContactProfile.id}</span>
+              </div>
+              
+              <div className="info-item">
+                <span className="info-item-label">Age</span>
+                <span className="info-item-value">{selectedContactProfile.age || '25'}</span>
+              </div>
+              
+              <div className="info-item">
+                <span className="info-item-label">Preferred Chat Language</span>
+                <span className="info-item-value" style={{ textTransform: 'capitalize' }}>
+                  {TRANSLATION_LANGUAGES.find(l => l.code === selectedContactProfile.language)?.name || 'English'}
+                </span>
+              </div>
+
+              <div className="info-item">
+                <span className="info-item-label">Status / Bio</span>
+                <span className="info-item-value" style={{ fontStyle: 'italic', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                  {selectedContactProfile.online ? '🟢 Online' : '⚪ Offline'}
+                </span>
+              </div>
+              
+              <button 
+                className="btn-primary" 
+                onClick={() => {
+                  const id = selectedContactProfile.id;
+                  setSelectedContactProfile(null);
+                  navigate(`/chat/${id}`);
+                }}
+                style={{ marginTop: '0.75rem', width: '100%' }}
+              >
+                Send Message
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -670,7 +1091,7 @@ function Step2EmailVerify() {
                 localStorage.setItem('onboarding_name', data.user.name || 'Explorer');
                 localStorage.setItem('onboarding_age', data.user.age || '25');
                 localStorage.setItem('onboarding_photo', data.user.photo || '');
-                if (data.user && data.user.language) {
+                if (data.user && data.user.language && !localStorage.getItem('settings_chat_lang')) {
                   localStorage.setItem('settings_chat_lang', data.user.language);
                 }
                 navigate('/success');
@@ -763,7 +1184,7 @@ function Step2LoginPassword() {
         localStorage.setItem('onboarding_name', data.user.name || 'Explorer');
         localStorage.setItem('onboarding_age', data.user.age || '25');
         localStorage.setItem('onboarding_photo', data.user.photo || '');
-        if (data.user.language) {
+        if (data.user.language && !localStorage.getItem('settings_chat_lang')) {
           localStorage.setItem('settings_chat_lang', data.user.language);
         }
         localStorage.setItem('smart_messenger_logged_in', 'true');
@@ -1641,56 +2062,131 @@ function Dashboard() {
     }
   };
 
-  const toggleVoicePhrasebook = (type) => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      globalShowToast("Speech API Error", "Speech Recognition is not supported in this browser.", "normal");
-      return;
-    }
+  const toggleVoicePhrasebook = async (type) => {
     const isCurrentlyListening = type === 'from' ? isListeningFrom : isListeningTo;
     if (isCurrentlyListening) {
-      if (phrasebookRecRef.current) phrasebookRecRef.current.stop();
+      try {
+        await CapSpeechRecognition.stop();
+      } catch(e) {
+        if (phrasebookRecRef.current) {
+          try { phrasebookRecRef.current.stop(); } catch(e2) {}
+        }
+      }
       if (type === 'from') setIsListeningFrom(false); else setIsListeningTo(false);
       return;
     }
+
+    try {
+      await CapSpeechRecognition.stop();
+    } catch(e) {}
     if (phrasebookRecRef.current) {
-        try { phrasebookRecRef.current.stop(); } catch(e){}
+      try { phrasebookRecRef.current.stop(); } catch(e){}
     }
     setIsListeningFrom(false);
     setIsListeningTo(false);
 
-    const rec = new SpeechRecognition();
     const langCode = type === 'from' ? langFrom : langTo;
-    rec.lang = langCode === 'en' ? 'en-US' : (langCode === 'hi' ? 'hi-IN' : (langCode === 'fr' ? 'fr-FR' : (langCode === 'es' ? 'es-ES' : langCode)));
-    rec.continuous = false;
-    rec.interimResults = false;
+    const langLocale = LANG_LOCALE_MAP[langCode] || 'en-US';
+    const langName = TRANSLATION_LANGUAGES.find(l => l.code === langCode)?.name || 'English';
 
-    rec.onstart = () => {
-      if (type === 'from') setIsListeningFrom(true); else setIsListeningTo(true);
-      globalShowToast("Voice Translator", "Speak now...", "normal");
-    };
+    // Try Capacitor native speech recognition first (works on Android app)
+    try {
+      const permResult = await CapSpeechRecognition.requestPermissions();
+      if (permResult.speechRecognition !== 'granted') {
+        globalShowToast("Microphone Blocked", "Please allow microphone access in your device settings.", "normal");
+        return;
+      }
 
-    rec.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      if (type === 'from') {
+      const available = await CapSpeechRecognition.available();
+      if (available.available) {
+        if (type === 'from') setIsListeningFrom(true); else setIsListeningTo(true);
+        globalShowToast("Voice Translator", `Listening in ${langName}...`, "normal");
+
+        const result = await CapSpeechRecognition.start({
+          language: langLocale,
+          maxResults: 1,
+          prompt: `Speak in ${langName}`,
+          partialResults: false,
+          popup: false
+        }).catch((err) => {
+          console.error("Native speech recognition error:", err);
+          return null;
+        });
+
+        if (type === 'from') setIsListeningFrom(false); else setIsListeningTo(false);
+        CapSpeechRecognition.removeAllListeners();
+
+        if (result && result.matches && result.matches.length > 0) {
+          const transcript = result.matches[0];
+          if (type === 'from') {
+            setTransInput(transcript);
+            handleTranslatePhrasebook(transcript, langFrom, langTo, 'forward');
+          } else {
+            setTransOutput(transcript);
+            handleTranslatePhrasebook(transcript, langTo, langFrom, 'backward');
+          }
+          globalShowToast("Voice Captured", `"${transcript}"`, "normal");
+        }
+        return; // Success with native, skip web fallback
+      }
+    } catch (capErr) {
+      console.log('Capacitor speech not available, falling back to Web API:', capErr.message);
+    }
+
+    // Fallback: Web Speech API (works in Chrome browser)
+    const WebSpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!WebSpeechRecognition) {
+      globalShowToast("Speech Not Supported", "Voice input is not available. Please type your message instead.", "normal");
+      return;
+    }
+
+    try {
+      const rec = new WebSpeechRecognition();
+      rec.lang = langLocale;
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.maxAlternatives = 1;
+
+      rec.onstart = () => {
+        if (type === 'from') setIsListeningFrom(true); else setIsListeningTo(true);
+        globalShowToast("Voice Translator", `Listening in ${langName}...`, "normal");
+      };
+
+      rec.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        if (type === 'from') {
           setTransInput(transcript);
           handleTranslatePhrasebook(transcript, langFrom, langTo, 'forward');
-      } else {
+        } else {
           setTransOutput(transcript);
           handleTranslatePhrasebook(transcript, langTo, langFrom, 'backward');
-      }
-    };
+        }
+        globalShowToast("Voice Captured", `"${transcript}"`, "normal");
+      };
 
-    rec.onerror = (err) => {
+      rec.onerror = (err) => {
+        console.error("Speech recognition error:", err);
+        if (type === 'from') setIsListeningFrom(false); else setIsListeningTo(false);
+        if (err.error === 'not-allowed' || err.error === 'service-not-allowed') {
+          globalShowToast("Microphone Blocked", "Please allow microphone access in your browser/app settings.", "normal");
+        } else if (err.error === 'no-speech') {
+          globalShowToast("No Speech", "No speech was detected. Please try again.", "normal");
+        } else {
+          globalShowToast("Voice Error", `Error: ${err.error || "Failed to capture speech."}`, "normal");
+        }
+      };
+
+      rec.onend = () => {
+        if (type === 'from') setIsListeningFrom(false); else setIsListeningTo(false);
+      };
+
+      phrasebookRecRef.current = rec;
+      rec.start();
+    } catch (startErr) {
+      console.error("Failed to start speech recognition:", startErr);
       if (type === 'from') setIsListeningFrom(false); else setIsListeningTo(false);
-    };
-
-    rec.onend = () => {
-      if (type === 'from') setIsListeningFrom(false); else setIsListeningTo(false);
-    };
-
-    phrasebookRecRef.current = rec;
-    rec.start();
+      globalShowToast("Voice Error", "Could not start voice input. Try using Chrome browser.", "normal");
+    }
   };
 
   const handleCopyPhrase = (text) => {
@@ -1800,7 +2296,7 @@ function Dashboard() {
         if (data.name) { setUserName(data.name); localStorage.setItem('onboarding_name', data.name); }
         if (data.age) { setUserAge(data.age); localStorage.setItem('onboarding_age', data.age); }
         if (data.photo) { setUserPhoto(data.photo); localStorage.setItem('onboarding_photo', data.photo); }
-        if (data.language) { localStorage.setItem('settings_chat_lang', data.language); }
+        if (data.language && !localStorage.getItem('settings_chat_lang')) { localStorage.setItem('settings_chat_lang', data.language); }
       })
       .catch(() => {
         // Offline / not found fallback: Register user details on the backend
@@ -2039,7 +2535,7 @@ function Dashboard() {
         <div class="options-dropdown-menu">
           <button class="btn-dropdown-item" onClick={() => setActiveModal('profile')}><i class="fa-regular fa-user"></i> My Profile</button>
           <button class="btn-dropdown-item" onClick={() => setActiveModal('settings')}><i class="fa-solid fa-sliders"></i> Settings</button>
-          <button class="btn-dropdown-item" onClick={() => setActiveModal('about')}><i class="fa-solid fa-circle-info"></i> About Project</button>
+          <button class="btn-dropdown-item" onClick={() => setActiveModal('about')}><i class="fa-solid fa-circle-info"></i> About App</button>
           <button class="btn-dropdown-item" onClick={handleResetRegistration}><i class="fa-solid fa-arrows-rotate"></i> Reset Registration</button>
           <button class="btn-dropdown-item logout" onClick={handleLogout}><i class="fa-solid fa-right-from-bracket"></i> Log Out</button>
         </div>
@@ -2063,7 +2559,16 @@ function Dashboard() {
         <div class="chat-threads-list">
           {filtered.map(c => (
             <div key={c.id} class="chat-thread-item" onClick={() => navigate(`/chat/${c.id}`)}>
-              <div className="thread-avatar-wrapper bg-blue-glow">
+              <div 
+                className="thread-avatar-wrapper bg-blue-glow"
+                style={{ cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.showContactPreview) {
+                    window.showContactPreview(c);
+                  }
+                }}
+              >
                 {c.photo ? (
                   <img src={c.photo} alt={c.name} style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
                 ) : (
@@ -2188,7 +2693,16 @@ function Dashboard() {
                 </>
               ) : (
                 <>
-                  <div class="profile-modal-avatar-wrapper">
+                  <div 
+                    class="profile-modal-avatar-wrapper"
+                    style={{ cursor: userPhoto ? 'pointer' : 'default' }}
+                    onClick={() => {
+                      if (userPhoto) {
+                        window.showGlobalLightbox(userPhoto);
+                      }
+                    }}
+                    title={userPhoto ? "Click to view full photo" : ""}
+                  >
                     {userPhoto ? (
                       <img src={userPhoto} alt="User Avatar" class="profile-modal-avatar" />
                     ) : (
@@ -2347,19 +2861,21 @@ function Dashboard() {
           <div class="custom-modal-backdrop" onClick={() => setActiveModal(null)}></div>
           <div class="custom-modal-card">
             <div class="custom-modal-header">
-              <h3>About Smart Messenger</h3>
+              <h3>About App</h3>
               <button class="btn-close-modal" onClick={() => setActiveModal(null)}>
                 <i class="fa-solid fa-xmark"></i>
               </button>
             </div>
-            <div class="custom-modal-body" style={{ fontSize: '0.85rem', lineHeight: 1.5, gap: '0.85rem' }}>
-              <p><strong>Smart Messenger</strong> is a full-stack real-time translation chat application designed to bridge the language gap in human-to-human communications.</p>
-              <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)', margin: '0.25rem 0' }}></div>
-              <p><i class="fa-solid fa-bolt" style={{ color: 'var(--primary-blue)', marginRight: '0.4rem', width: '14px' }}></i><strong>WebSocket Engine:</strong> Handled by Socket.io and node server to relay chats in real-time between clients.</p>
-              <p><i class="fa-solid fa-gears" style={{ color: 'var(--success-green)', marginRight: '0.4rem', width: '14px' }}></i><strong>MyMemory Integration:</strong> Dynamic proxies on the server resolve translations with robust offline fallbacks.</p>
-              <p><i class="fa-solid fa-wand-magic-sparkles" style={{ color: '#a855f7', marginRight: '0.4rem', width: '14px' }}></i><strong>React Architecture:</strong> Re-scaffolded using modular components, React Router DOM, hooks, and clean state hooks.</p>
-              <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)', margin: '0.25rem 0' }}></div>
-              <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textAlign: 'center' }}>Version 2.0.0 • Created by Antigravity</p>
+            <div class="custom-modal-body" style={{ fontSize: '0.85rem', lineHeight: 1.5, gap: '0.8rem' }}>
+              <p><strong>Smart Messenger</strong> is a full-stack, real-time translating chat application designed to bridge cross-lingual barriers natively.</p>
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)', margin: '0.2rem 0' }}></div>
+              <p><i class="fa-solid fa-database" style={{ color: 'var(--primary-blue)', marginRight: '0.4rem', width: '14px' }}></i><strong>Local-First Database:</strong> Chats are saved instantly in device storage (localStorage/SQLite) for zero-latency offline reading, synced via temporary queues, and backed up in MongoDB Atlas.</p>
+              <p><i class="fa-solid fa-bolt" style={{ color: 'var(--success-green)', marginRight: '0.4rem', width: '14px' }}></i><strong>Real-Time WebSockets:</strong> Bi-directional routing powered by Socket.io and Node.js for instant message deliveries and online presence states.</p>
+              <p><i class="fa-solid fa-microphone" style={{ color: '#a855f7', marginRight: '0.4rem', width: '14px' }}></i><strong>Native Mic API:</strong> Leverages Capacitor Speech Recognition on mobile devices, falling back to Web Speech API in desktop browsers.</p>
+              <p><i class="fa-solid fa-language" style={{ color: '#f59e0b', marginRight: '0.4rem', width: '14px' }}></i><strong>Universal Translator:</strong> Integrated translation proxy APIs with offline-ready backup mappings.</p>
+              <p><i class="fa-solid fa-palette" style={{ color: '#ec4899', marginRight: '0.4rem', width: '14px' }}></i><strong>Aesthetics:</strong> High-performance responsive layouts styled with dark-mode glassmorphic HSL theme tokens.</p>
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)', margin: '0.2rem 0' }}></div>
+              <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: 'center' }}>Version 2.5.0 • Developed with Antigravity</p>
             </div>
           </div>
         </div>
@@ -2956,7 +3472,23 @@ function ChatDetail() {
           <button class="btn-back-chat" onClick={() => navigate('/dashboard')}>
             <i class="fa-solid fa-arrow-left"></i>
           </button>
-          <div className="chat-partner-avatar-wrapper bg-blue-glow">
+          <div 
+            className="chat-partner-avatar-wrapper bg-blue-glow"
+            style={{ cursor: 'pointer' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (window.showContactPreview) {
+                window.showContactPreview({
+                  id: contactId,
+                  uid: contactId,
+                  name: (contactUser && contactUser.name) || contactId,
+                  photo: (contactUser && contactUser.photo) || '',
+                  language: (contactUser && contactUser.language) || 'en',
+                  online: isPartnerOnline
+                });
+              }
+            }}
+          >
             {contactUser && contactUser.photo ? (
               <img src={contactUser.photo} alt="Avatar" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
             ) : (
@@ -3008,7 +3540,16 @@ function ChatDetail() {
           {messages.map((m) => (
             <div key={m.id || Math.random()} class={`message-bubble ${m.sender}`} style={{ position: 'relative' }}>
               {m.image ? (
-                <div style={{ cursor: 'pointer', position: 'relative' }} onClick={() => { setLightboxImage(m.image); setLightboxZoom(1); setLightboxPos({ x: 0, y: 0 }); }}>
+                <div 
+                  style={{ cursor: 'pointer', position: 'relative' }} 
+                  onClick={() => {
+                    const chatImages = messages.filter(msg => msg.image).map(msg => msg.image);
+                    const imgIdx = chatImages.indexOf(m.image);
+                    if (window.showGlobalLightbox) {
+                      window.showGlobalLightbox(chatImages, imgIdx >= 0 ? imgIdx : 0);
+                    }
+                  }}
+                >
                   <img 
                     src={m.image} 
                     alt="Shared" 
@@ -3096,80 +3637,7 @@ function ChatDetail() {
         </form>
       </footer>
 
-      {/* Image Lightbox Fullscreen Viewer */}
-      {lightboxImage && (
-        <div 
-          style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.92)', zIndex: 9999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
-          onClick={() => { setLightboxImage(null); setLightboxZoom(1); setLightboxPos({ x: 0, y: 0 }); }}
-        >
-          {/* Top bar with controls */}
-          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.25rem', zIndex: 10 }}>
-            <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', fontWeight: 500 }}>
-              <i class="fa-regular fa-image" style={{ marginRight: '0.4rem' }}></i> Image Preview
-            </span>
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-              <button 
-                onClick={(e) => { e.stopPropagation(); setLightboxZoom(z => Math.max(0.5, z - 0.25)); }}
-                style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
-                title="Zoom Out"
-              >
-                <i class="fa-solid fa-minus"></i>
-              </button>
-              <span style={{ color: 'white', fontSize: '0.8rem', minWidth: '40px', textAlign: 'center' }}>{Math.round(lightboxZoom * 100)}%</span>
-              <button 
-                onClick={(e) => { e.stopPropagation(); setLightboxZoom(z => Math.min(4, z + 0.25)); }}
-                style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
-                title="Zoom In"
-              >
-                <i class="fa-solid fa-plus"></i>
-              </button>
-              <button 
-                onClick={(e) => { e.stopPropagation(); setLightboxZoom(1); setLightboxPos({ x: 0, y: 0 }); }}
-                style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem' }}
-                title="Reset Zoom"
-              >
-                <i class="fa-solid fa-arrows-rotate"></i>
-              </button>
-              <button 
-                onClick={(e) => { e.stopPropagation(); const a = document.createElement('a'); a.href = lightboxImage; a.download = 'smart-messenger-image.png'; a.click(); }}
-                style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem' }}
-                title="Download"
-              >
-                <i class="fa-solid fa-download"></i>
-              </button>
-              <button 
-                onClick={(e) => { e.stopPropagation(); setLightboxImage(null); setLightboxZoom(1); setLightboxPos({ x: 0, y: 0 }); }}
-                style={{ background: 'rgba(255,70,70,0.25)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}
-                title="Close"
-              >
-                <i class="fa-solid fa-xmark"></i>
-              </button>
-            </div>
-          </div>
-          {/* The image itself */}
-          <div 
-            style={{ overflow: 'auto', maxWidth: '95vw', maxHeight: '85vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <img 
-              src={lightboxImage} 
-              alt="Full View" 
-              style={{ 
-                transform: `scale(${lightboxZoom})`, 
-                transition: 'transform 0.2s ease', 
-                maxWidth: lightboxZoom <= 1 ? '90vw' : 'none', 
-                maxHeight: lightboxZoom <= 1 ? '80vh' : 'none', 
-                borderRadius: '12px', 
-                boxShadow: '0 8px 48px rgba(0,0,0,0.5)',
-                objectFit: 'contain',
-                cursor: lightboxZoom > 1 ? 'grab' : 'zoom-in'
-              }} 
-              onClick={(e) => { e.stopPropagation(); setLightboxZoom(z => z >= 2 ? 1 : z + 0.5); }}
-              draggable={false}
-            />
-          </div>
-        </div>
-      )}
+
 
     </main>
   );
