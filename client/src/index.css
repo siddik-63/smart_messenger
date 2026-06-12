@@ -1200,10 +1200,21 @@ body:has(.chat-main-wrapper) {
     color: var(--text-muted);
 }
 
+.header-center {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    pointer-events: none;
+}
+
 .app-title-main {
-    font-size: 1.35rem;
-    font-weight: 700;
-    letter-spacing: 0.5px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
     background: linear-gradient(135deg, #10b981 0%, #3b82f6 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
