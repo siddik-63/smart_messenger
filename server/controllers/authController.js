@@ -37,6 +37,35 @@ async function dbFindUser(id) {
             password: doc.password,
             isPlaceholder: doc.isPlaceholder || false
         };
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            const docRef = dbConfig.firebaseDb.collection('users').doc(cleanId);
+            const docSnap = await docRef.get();
+            if (!docSnap.exists) return null;
+            
+            const userData = docSnap.data();
+            const contactsSnap = await docRef.collection('contacts').get();
+            const contactsList = contactsSnap.docs.map(d => d.id);
+            
+            return {
+                id: userData.id || cleanId,
+                uid: userData.uid || userData.id || cleanId,
+                email: userData.email || (cleanId.includes('@') ? cleanId : ''),
+                phone: userData.phone || (!cleanId.includes('@') ? cleanId : ''),
+                name: userData.name || '',
+                age: userData.age || '25',
+                bio: userData.bio || 'Available',
+                profilePic: userData.profilePic || userData.photo || '',
+                preferredChatLanguage: userData.preferredChatLanguage || userData.language || 'en',
+                preferredUiLanguage: userData.preferredUiLanguage || userData.language || 'en',
+                password: userData.password || '',
+                contacts: contactsList,
+                isPlaceholder: userData.isPlaceholder || false
+            };
+        } catch (err) {
+            console.error(`Firebase error finding user ${id}:`, err);
+            return null;
+        }
     } else {
         const db = await dbConfig.readDB();
         const user = db.users.find(u => u.id.toLowerCase() === cleanId);
@@ -101,6 +130,50 @@ async function dbSaveUser(id, plainPassword, name, age, photo, language, email =
             preferredChatLanguage: doc.preferredChatLanguage,
             preferredUiLanguage: doc.preferredUiLanguage
         };
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            const docRef = dbConfig.firebaseDb.collection('users').doc(cleanId);
+            const docSnap = await docRef.get();
+            const existing = docSnap.exists ? docSnap.data() : {};
+            
+            const updates = {};
+            if (name !== undefined) updates.name = name;
+            if (age !== undefined) updates.age = age;
+            if (photo !== undefined) {
+                updates.profilePic = photo;
+                updates.photo = photo; // legacy compatibility
+            }
+            if (plainPassword) updates.password = hashedPassword;
+            if (language !== undefined) {
+                updates.preferredChatLanguage = language;
+                updates.preferredUiLanguage = language;
+                updates.language = language; // legacy compatibility
+            }
+            if (email) updates.email = email;
+            if (phone) updates.phone = phone;
+            if (bio) updates.bio = bio;
+            updates.isPlaceholder = false;
+            
+            if (!existing.id) {
+                updates.id = cleanId;
+                updates.uid = cleanId;
+            }
+
+            await docRef.set(updates, { merge: true });
+            
+            return {
+                id: cleanId,
+                uid: cleanId,
+                name: updates.name !== undefined ? updates.name : (existing.name || 'Explorer'),
+                age: updates.age !== undefined ? updates.age : (existing.age || '25'),
+                photo: updates.profilePic !== undefined ? updates.profilePic : (existing.profilePic || existing.photo || ''),
+                preferredChatLanguage: updates.preferredChatLanguage !== undefined ? updates.preferredChatLanguage : (existing.preferredChatLanguage || existing.language || 'en'),
+                preferredUiLanguage: updates.preferredUiLanguage !== undefined ? updates.preferredUiLanguage : (existing.preferredUiLanguage || existing.language || 'en')
+            };
+        } catch (err) {
+            console.error(`Firebase error saving user ${id}:`, err);
+            throw err;
+        }
     } else {
         const db = await dbConfig.readDB();
         const existingIndex = db.users.findIndex(u => u.id.toLowerCase() === cleanId);

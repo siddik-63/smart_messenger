@@ -18,6 +18,28 @@ async function dbGetMessages(userId, contactId) {
             image: msg.mediaUrl || '',
             time: new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }));
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            const msgsSnap = await dbConfig.firebaseDb.collection('chats').doc(roomKey).collection('messages')
+                .orderBy('timestamp', 'asc').get();
+            
+            return msgsSnap.docs.map(doc => {
+                const msg = doc.data();
+                return {
+                    id: msg.messageId || msg.id,
+                    sender: msg.senderId === uId ? 'outgoing' : 'incoming',
+                    senderId: msg.senderId,
+                    translation: msg.translatedText || msg.translation || '',
+                    original: msg.originalText || msg.original || '',
+                    image: msg.mediaUrl || msg.image || '',
+                    time: msg.time || '',
+                    timestamp: msg.timestamp
+                };
+            });
+        } catch (err) {
+            console.error("Firebase error getting messages:", err);
+            return [];
+        }
     } else {
         const db = await dbConfig.readDB();
         const thread = db.messages[roomKey] || [];
@@ -43,6 +65,17 @@ async function dbClearMessages(userId, contactId) {
 
     if (dbConfig.useMongoDB) {
         await Message.deleteMany({ chatId: roomKey });
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            const msgsSnap = await dbConfig.firebaseDb.collection('chats').doc(roomKey).collection('messages').get();
+            const batch = dbConfig.firebaseDb.batch();
+            msgsSnap.docs.forEach(doc => {
+                batch.delete(doc.ref);
+            });
+            await batch.commit();
+        } catch (err) {
+            console.error("Firebase error clearing messages:", err);
+        }
     } else {
         const db = await dbConfig.readDB();
         db.messages[roomKey] = [];
@@ -53,6 +86,12 @@ async function dbClearMessages(userId, contactId) {
 async function dbDeleteMessage(room, id) {
     if (dbConfig.useMongoDB) {
         await Message.deleteOne({ chatId: room, messageId: id });
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            await dbConfig.firebaseDb.collection('chats').doc(room).collection('messages').doc(id).delete();
+        } catch (err) {
+            console.error("Firebase error deleting message:", err);
+        }
     } else {
         const db = await dbConfig.readDB();
         if (db.messages[room]) {
@@ -84,6 +123,29 @@ async function dbSaveMessage(userId, contactId, translation, original, time, ima
             seen: false
         });
         await newMessage.save();
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            const messageObject = {
+                id: msgId,
+                messageId: msgId,
+                senderId: uId,
+                receiverId: cId,
+                originalText: original,
+                translatedText: translation,
+                time,
+                mediaUrl: image || '',
+                image: image || '', // legacy compatibility
+                timestamp: Date.now()
+            };
+            await dbConfig.firebaseDb.collection('chats').doc(roomKey).collection('messages').doc(msgId).set(messageObject);
+            await dbConfig.firebaseDb.collection('chats').doc(roomKey).set({
+                participants: [uId, cId],
+                lastMessage: { text: image ? '[Image Shared]' : translation, time, senderId: uId },
+                updatedAt: Date.now()
+            }, { merge: true });
+        } catch (err) {
+            console.error("Firebase error saving message:", err);
+        }
     } else {
         const db = await dbConfig.readDB();
         if (!db.messages[roomKey]) {

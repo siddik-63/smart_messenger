@@ -30,6 +30,24 @@ async function dbAddContact(userId, contactId) {
                 isPlaceholder: true
             });
             await newDoc.save();
+        } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+            try {
+                const docRef = dbConfig.firebaseDb.collection('users').doc(cId);
+                await docRef.set({
+                    id: cId,
+                    uid: cId,
+                    password: tempPass,
+                    name: cId.split('@')[0],
+                    age: 25,
+                    photo: '',
+                    profilePic: '',
+                    preferredChatLanguage: 'en',
+                    preferredUiLanguage: 'en',
+                    isPlaceholder: true
+                });
+            } catch (err) {
+                console.error("Firebase error creating placeholder contact user:", err);
+            }
         } else {
             const db = await dbConfig.readDB();
             db.users.push({
@@ -69,6 +87,24 @@ async function dbAddContact(userId, contactId) {
             photo: contactUserDoc.profilePic || '',
             language: contactUserDoc.preferredChatLanguage || 'en'
         };
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            await dbConfig.firebaseDb.collection('users').doc(uId).collection('contacts').doc(cId).set({ addedAt: Date.now() });
+            await dbConfig.firebaseDb.collection('users').doc(cId).collection('contacts').doc(uId).set({ addedAt: Date.now() });
+            
+            const contactUserDoc = await authController.dbFindUser(cId);
+            return {
+                id: contactUserDoc.uid,
+                uid: contactUserDoc.uid,
+                name: contactUserDoc.name,
+                age: contactUserDoc.age,
+                photo: contactUserDoc.profilePic || contactUserDoc.photo || '',
+                language: contactUserDoc.preferredChatLanguage || contactUserDoc.language || 'en'
+            };
+        } catch (err) {
+            console.error("Firebase error adding contact:", err);
+            return null;
+        }
     } else {
         const db = await dbConfig.readDB();
         const user = db.users.find(u => u.id.toLowerCase() === uId);
@@ -105,6 +141,13 @@ async function dbDeleteContact(userId, contactId) {
     if (dbConfig.useMongoDB) {
         await Contact.deleteOne({ ownerUid: uId, contactUid: cId });
         await Contact.deleteOne({ ownerUid: cId, contactUid: uId });
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            await dbConfig.firebaseDb.collection('users').doc(uId).collection('contacts').doc(cId).delete();
+            await dbConfig.firebaseDb.collection('users').doc(cId).collection('contacts').doc(uId).delete();
+        } catch (err) {
+            console.error("Firebase error deleting contact:", err);
+        }
     } else {
         const db = await dbConfig.readDB();
         const user = db.users.find(u => u.id.toLowerCase() === uId);
@@ -147,6 +190,45 @@ async function dbGetContacts(userId) {
             }
         }
         return contactsList;
+    } else if (dbConfig.useFirebase && dbConfig.firebaseDb) {
+        try {
+            const user = await authController.dbFindUser(uId);
+            if (!user) return [];
+            
+            const contactsList = [];
+            const contactIds = user.contacts || [];
+
+            for (const cId of contactIds) {
+                const contactUser = await authController.dbFindUser(cId);
+                if (contactUser) {
+                    const roomKey = [uId, cId].sort().join('_');
+                    
+                    const lastMsgSnap = await dbConfig.firebaseDb.collection('chats').doc(roomKey).collection('messages')
+                        .orderBy('timestamp', 'desc').limit(1).get();
+                    let lastMsg = null;
+                    if (!lastMsgSnap.empty) {
+                        lastMsg = lastMsgSnap.docs[0].data();
+                    }
+                    
+                    contactsList.push({
+                        id: contactUser.uid,
+                        uid: contactUser.uid,
+                        name: contactUser.name,
+                        age: contactUser.age,
+                        photo: contactUser.profilePic || contactUser.photo || '',
+                        language: contactUser.preferredChatLanguage || contactUser.language || 'en',
+                        snippet: lastMsg ? (lastMsg.image ? '[Image]' : lastMsg.translation || lastMsg.translatedText) : 'No messages yet',
+                        time: lastMsg ? lastMsg.time : '',
+                        badge: 'Chat',
+                        online: !!onlineUsers[contactUser.uid.toLowerCase()]
+                    });
+                }
+            }
+            return contactsList;
+        } catch (err) {
+            console.error("Firebase error getting contacts:", err);
+            return [];
+        }
     } else {
         const db = await dbConfig.readDB();
         const user = db.users.find(u => u.id.toLowerCase() === uId);

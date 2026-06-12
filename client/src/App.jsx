@@ -2205,6 +2205,20 @@ function Dashboard() {
   const [editPhoto, setEditPhoto] = useState(userPhoto);
   const profileFileInputRef = useRef(null);
 
+  useEffect(() => {
+    if (activeModal === 'profile') {
+      let currentName = userName;
+      if (userName && (userName.toLowerCase().trim() === 'smart messenger' || userName.toLowerCase().trim() === 'smartchat')) {
+        currentName = 'Explorer User';
+        setUserName(currentName);
+        localStorage.setItem('onboarding_name', currentName);
+      }
+      setEditName(currentName);
+      setEditAge(userAge);
+      setEditPhoto(userPhoto);
+    }
+  }, [activeModal, userName, userAge, userPhoto]);
+
   const handleProfilePhotoChange = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -2505,25 +2519,23 @@ function Dashboard() {
       
       {/* Header */}
       <header class="app-header">
-        <div class="header-left" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div class="user-avatar-trigger" onClick={(e) => { e.stopPropagation(); setActiveModal('profile'); }}>
+        <div class="header-left">
+          <div class="logo-icon-wrapper">
+            <i class="fa-solid fa-comments" style={{ background: 'linear-gradient(135deg, #10b981 0%, #3b82f6 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontSize: '1.15rem' }}></i>
+          </div>
+          <h1 class="app-title-main">Smart Messenger</h1>
+        </div>
+        <div class="header-right" style={{ display: 'flex', gap: '0.65rem', alignItems: 'center' }}>
+          <button class="btn-header-option" title="AI Phrasebook" onClick={(e) => { e.stopPropagation(); setActiveModal('phrasebook'); }}>
+            <i class="fa-solid fa-wand-magic-sparkles" style={{ color: 'var(--primary-blue)' }}></i>
+          </button>
+          <div class="user-avatar-trigger" onClick={(e) => { e.stopPropagation(); setActiveModal('profile'); }} title="My Profile">
             {userPhoto ? (
               <img src={userPhoto} alt="User Avatar" class="header-avatar-img" />
             ) : (
               <i class="fa-solid fa-circle-user header-avatar-fallback"></i>
             )}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left' }}>
-            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', lineHeight: 1.2 }}>{userName}</span>
-          </div>
-        </div>
-        <div class="header-center">
-          <h1 class="app-title-main">Smart Messenger</h1>
-        </div>
-        <div class="header-right" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <button class="btn-header-option" title="AI Phrasebook" onClick={(e) => { e.stopPropagation(); setActiveModal('phrasebook'); }}>
-            <i class="fa-solid fa-wand-magic-sparkles" style={{ color: 'var(--primary-blue)' }}></i>
-          </button>
           <button class="btn-header-option" onClick={(e) => { e.stopPropagation(); setDropdownOpen(!dropdownOpen); }}>
             <i class="fa-solid fa-ellipsis-vertical"></i>
           </button>
@@ -2672,11 +2684,11 @@ function Dashboard() {
                   </div>
                   <input type="file" ref={profileFileInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleProfilePhotoChange} />
                   
-                  <div class="input-group" style={{ width: '100%', marginBottom: '1rem' }}>
+                   <div class="input-group" style={{ width: '100%', marginBottom: '1rem' }}>
                     <span class="field-label">Full Name</span>
                     <div class="input-wrapper">
                       <i class="fa-solid fa-signature input-icon"></i>
-                      <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} style={{ width: '100%', background: 'transparent', border: 'none', color: 'var(--text-main)', outline: 'none' }} />
+                      <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} />
                     </div>
                   </div>
                   
@@ -2684,7 +2696,7 @@ function Dashboard() {
                     <span class="field-label">Age</span>
                     <div class="input-wrapper">
                       <i class="fa-solid fa-calendar input-icon"></i>
-                      <input type="number" value={editAge} onChange={(e) => setEditAge(e.target.value)} style={{ width: '100%', background: 'transparent', border: 'none', color: 'var(--text-main)', outline: 'none' }} />
+                      <input type="number" value={editAge} onChange={(e) => setEditAge(e.target.value)} />
                     </div>
                   </div>
                   
