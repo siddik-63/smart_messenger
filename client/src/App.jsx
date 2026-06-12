@@ -6,6 +6,46 @@ import { auth, googleProvider, db } from './firebase.js';
 import { RecaptchaVerifier, signInWithPhoneNumber, signInWithPopup, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, collection, addDoc, onSnapshot, query, orderBy, limit, getDocs, where, deleteDoc } from 'firebase/firestore';
 
+import { io } from 'socket.io-client';
+import { API_BASE_URL } from './config.js';
+
+let socketInstance = null;
+const socketListeners = new Set();
+
+function getSocket(userId) {
+  if (!socketInstance && userId) {
+    socketInstance = io(API_BASE_URL, {
+      transports: ['websocket'],
+      autoConnect: true
+    });
+    
+    socketInstance.on('connect', () => {
+      console.log('Socket connected:', socketInstance.id);
+      socketInstance.emit('register_online', { userId });
+    });
+
+    socketInstance.on('receive_msg', (data) => {
+      socketListeners.forEach(listener => listener('receive_msg', data));
+    });
+
+    socketInstance.on('user_status_change', (data) => {
+      socketListeners.forEach(listener => listener('user_status_change', data));
+    });
+
+    socketInstance.on('partner_status', (data) => {
+      socketListeners.forEach(listener => listener('partner_status', data));
+    });
+  }
+  return socketInstance;
+}
+
+function disconnectSocket() {
+  if (socketInstance) {
+    socketInstance.disconnect();
+    socketInstance = null;
+  }
+}
+
 // Native browser SHA-256 helper for password checking
 async function sha256(message) {
     if (!message) return '';
@@ -171,18 +211,17 @@ function Step1Login() {
   useEffect(() => {
     localStorage.setItem('onboarding_id', identifier);
     if (identifier.trim().length > 3) {
-      // Check if user exists in Firestore
-      const userRef = doc(db, 'users', identifier.trim().toLowerCase());
-      getDoc(userRef)
-        .then(docSnap => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            setUserExists(!!data && !data.isPlaceholder);
-          } else {
-            setUserExists(false);
-          }
-        })
-        .catch(err => console.error(err));
+      // Check if user exists in backend database
+      fetch(API_BASE_URL + '/api/auth/check-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: identifier.trim().toLowerCase() })
+      })
+      .then(res => res.json())
+      .then(data => {
+        setUserExists(!!data.exists);
+      })
+      .catch(err => console.error(err));
     } else {
       setUserExists(false);
       setIsPasswordMode(false);
@@ -206,17 +245,19 @@ function Step1Login() {
       
       globalShowToast('Authentication', 'Google Sign-In Successful!', 'normal');
       
-      // Auto-register in Firestore then navigate
-      const userRef = doc(db, 'users', uid);
-      await setDoc(userRef, {
-        id: uid,
-        name: user.displayName || 'Explorer',
-        age: '25',
-        password: 'google_oauth_user',
-        photo: user.photoURL || '',
-        language: 'en',
-        isPlaceholder: false
-      }, { merge: true });
+      // Auto-register in backend API then navigate
+      await fetch(API_BASE_URL + '/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: uid,
+          name: user.displayName || 'Explorer',
+          age: 25,
+          password: 'google_oauth_user',
+          photo: user.photoURL || '',
+          language: 'en'
+        })
+      });
 
       localStorage.setItem('smart_messenger_logged_in', 'true');
       setTimeout(() => navigate('/dashboard'), 800);
@@ -704,63 +745,37 @@ function Step2LoginPassword() {
     e.preventDefault();
     setIsLoading(true);
 
-    const email = identifier.trim().toLowerCase();
-    
-    // Attempt standard Firebase Auth sign-in for email users
-    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    if (isEmail) {
-      signInWithEmailAndPassword(auth, email, password)
-        .then(async () => {
-          const userSnap = await getDoc(doc(db, 'users', email));
-          const userData = userSnap.exists() ? userSnap.data() : {};
-          
-          localStorage.setItem('onboarding_password', password);
-          localStorage.setItem('onboarding_name', userData.name || 'Explorer');
-          localStorage.setItem('onboarding_age', userData.age || '25');
-          localStorage.setItem('onboarding_photo', userData.photo || '');
-          if (userData.language) {
-            localStorage.setItem('settings_chat_lang', userData.language);
-          }
-          localStorage.setItem('smart_messenger_logged_in', 'true');
-          globalShowToast('Authentication', 'Login Successful!', 'normal');
-          setTimeout(() => navigate('/dashboard'), 800);
-        })
-        .catch(err => {
-          globalShowToast('Login Failure', err.message, 'normal');
-        })
-        .finally(() => {
-          setIsLoading(false);
-        });
-    } else {
-      // Local document password check fallback for phone users
-      getDoc(doc(db, 'users', email))
-        .then(async (userSnap) => {
-          if (!userSnap.exists()) throw new Error("User profile not found.");
-          const userData = userSnap.data();
-          const hashed = await sha256(password);
-          
-          if (userData.password === hashed || userData.password === password) {
-            localStorage.setItem('onboarding_password', password);
-            localStorage.setItem('onboarding_name', userData.name || 'Explorer');
-            localStorage.setItem('onboarding_age', userData.age || '25');
-            localStorage.setItem('onboarding_photo', userData.photo || '');
-            if (userData.language) {
-              localStorage.setItem('settings_chat_lang', userData.language);
-            }
-            localStorage.setItem('smart_messenger_logged_in', 'true');
-            globalShowToast('Authentication', 'Login Successful!', 'normal');
-            setTimeout(() => navigate('/dashboard'), 800);
-          } else {
-            throw new Error("Incorrect Password");
-          }
-        })
-        .catch(err => {
-          globalShowToast('Login Failure', err.message, 'normal');
-        })
-        .finally(() => {
-          setIsLoading(false);
-        });
-    }
+    const cleanId = identifier.trim().toLowerCase();
+
+    fetch(API_BASE_URL + '/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: cleanId, password })
+    })
+      .then(res => {
+        if (!res.ok) {
+          return res.json().then(data => { throw new Error(data.error || "Authentication failed."); });
+        }
+        return res.json();
+      })
+      .then(data => {
+        localStorage.setItem('onboarding_password', password);
+        localStorage.setItem('onboarding_name', data.user.name || 'Explorer');
+        localStorage.setItem('onboarding_age', data.user.age || '25');
+        localStorage.setItem('onboarding_photo', data.user.photo || '');
+        if (data.user.language) {
+          localStorage.setItem('settings_chat_lang', data.user.language);
+        }
+        localStorage.setItem('smart_messenger_logged_in', 'true');
+        globalShowToast('Authentication', 'Login Successful!', 'normal');
+        setTimeout(() => navigate('/dashboard'), 800);
+      })
+      .catch(err => {
+        globalShowToast('Login Failure', err.message, 'normal');
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
   };
 
   const handleForgotPassword = (e) => {
@@ -876,34 +891,24 @@ function Step3Password() {
       const photo = localStorage.getItem('onboarding_photo') || '';
       const cleanId = identifier.trim().toLowerCase();
 
-      sha256(password).then((hashedPassword) => {
-        // 1. Update Express backend database
-        fetch(API_BASE_URL + '/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: identifier, password, name, age, photo })
-        })
-        .then(() => {
-          // 2. Update Firestore database
-          const userRef = doc(db, 'users', cleanId);
-          return setDoc(userRef, {
-            id: cleanId,
-            password: hashedPassword,
-            name,
-            age,
-            photo
-          }, { merge: true });
-        })
-        .then(() => {
-          localStorage.removeItem('onboarding_is_reset');
-          navigate('/success');
-        })
-        .catch((err) => {
-          console.error("Failed to reset password:", err);
-          // Fallback to success so user is not stuck
-          localStorage.removeItem('onboarding_is_reset');
-          navigate('/success');
-        });
+      fetch(API_BASE_URL + '/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: cleanId, password, name, age, photo })
+      })
+      .then(res => {
+        if (!res.ok) throw new Error("Registration failed on server");
+        return res.json();
+      })
+      .then(() => {
+        localStorage.removeItem('onboarding_is_reset');
+        navigate('/success');
+      })
+      .catch((err) => {
+        console.error("Failed to reset password:", err);
+        // Fallback to success so user is not stuck
+        localStorage.removeItem('onboarding_is_reset');
+        navigate('/success');
       });
     } else {
       navigate('/details');
@@ -1217,26 +1222,22 @@ function Step5Photo() {
     const cleanId = identifier.trim().toLowerCase();
 
     try {
-      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanId);
-      if (isEmail) {
-        try {
-          await createUserWithEmailAndPassword(auth, cleanId, password);
-        } catch (authErr) {
-          console.log("Auth user creation bypassed/exists:", authErr.message);
-        }
-      }
+      const res = await fetch(API_BASE_URL + '/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: cleanId,
+          password,
+          name,
+          age,
+          photo: customPhoto,
+          language: localStorage.getItem('settings_ui_lang') || 'en'
+        })
+      });
 
-      const hashedPassword = password ? await sha256(password) : '';
-      const userRef = doc(db, 'users', cleanId);
-      await setDoc(userRef, {
-        id: cleanId,
-        password: hashedPassword,
-        name,
-        age,
-        photo: customPhoto,
-        language: localStorage.getItem('settings_ui_lang') || 'en',
-        isPlaceholder: false
-      }, { merge: true });
+      if (!res.ok) {
+        throw new Error("Failed to register profile on server");
+      }
 
       localStorage.setItem('onboarding_photo', customPhoto);
       globalShowToast('Profile Saved', 'Profile registered successfully!', 'normal');
@@ -1384,12 +1385,26 @@ function Step6Language() {
     document.cookie = `googtrans=/en/${uiLang}; path=/; domain=${window.location.hostname}`;
     document.cookie = `googtrans=/en/${uiLang}; path=/;`;
     
-    // Save language selection to Firestore user document
+    // Save language selection to backend database user profile
     const cleanId = identifier.trim().toLowerCase();
     try {
-      await updateDoc(doc(db, 'users', cleanId), { language: uiLang });
+      const name = localStorage.getItem('onboarding_name') || 'Explorer';
+      const age = localStorage.getItem('onboarding_age') || '25';
+      const photo = localStorage.getItem('onboarding_photo') || '';
+      
+      await fetch(API_BASE_URL + '/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: cleanId,
+          name,
+          age,
+          photo,
+          language: uiLang
+        })
+      });
     } catch (err) {
-      console.error("Failed to update language in Firestore:", err);
+      console.error("Failed to update language on backend:", err);
     }
     
     localStorage.setItem('smart_messenger_logged_in', 'true');
@@ -1730,13 +1745,17 @@ function Dashboard() {
     setUserPhoto(editPhoto);
 
     const cleanId = userId.toLowerCase();
-    const userRef = doc(db, 'users', cleanId);
-    setDoc(userRef, { 
-      name: editName.trim(), 
-      age: editAge.trim(), 
-      photo: editPhoto,
-      language: currentUiLang
-    }, { merge: true }).catch(err => console.error('Failed to update profile in Firestore', err));
+    fetch(API_BASE_URL + '/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        id: cleanId,
+        name: editName.trim(), 
+        age: editAge.trim(), 
+        photo: editPhoto,
+        language: currentUiLang
+      })
+    }).catch(err => console.error('Failed to update profile', err));
 
     setIsEditingProfile(false);
     globalShowToast('Profile Updated', 'Your profile has been saved successfully.', 'normal');
@@ -1748,12 +1767,13 @@ function Dashboard() {
       const cleanId = userId.toLowerCase();
       const cleanContactId = contactId.toLowerCase();
       
-      deleteDoc(doc(db, 'users', cleanId, 'contacts', cleanContactId))
+      fetch(`${API_BASE_URL}/api/contacts/${cleanId}/${cleanContactId}`, {
+        method: 'DELETE'
+      })
         .then(() => {
-          deleteDoc(doc(db, 'users', cleanContactId, 'contacts', cleanId));
           setContacts(prev => {
             const next = prev.filter(c => c.id !== contactId);
-            localStorage.setItem('smart_messenger_contacts_backup', JSON.stringify(next.map(c => c.id)));
+            localStorage.setItem('smart_messenger_contacts_backup', JSON.stringify(next));
             return next;
           });
           globalShowToast("Delete Contact", "Contact removed successfully.", "normal");
@@ -1770,123 +1790,107 @@ function Dashboard() {
 
     const cleanUid = userId.toLowerCase();
 
-    // 1. Real-time User Profile sync
-    const unsubscribeProfile = onSnapshot(doc(db, 'users', cleanUid), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
+    // Initialize/Get Socket
+    const s = getSocket(cleanUid);
+
+    // 1. Sync User Profile from backend
+    fetch(`${API_BASE_URL}/api/users/${cleanUid}`)
+      .then(res => res.json())
+      .then(data => {
         if (data.name) { setUserName(data.name); localStorage.setItem('onboarding_name', data.name); }
         if (data.age) { setUserAge(data.age); localStorage.setItem('onboarding_age', data.age); }
         if (data.photo) { setUserPhoto(data.photo); localStorage.setItem('onboarding_photo', data.photo); }
         if (data.language) { localStorage.setItem('settings_chat_lang', data.language); }
-      } else {
+      })
+      .catch(() => {
+        // Offline / not found fallback: Register user details on the backend
         const password = localStorage.getItem('onboarding_password') || 'Password123!';
         const name = localStorage.getItem('onboarding_name') || 'Explorer';
         const age = localStorage.getItem('onboarding_age') || '25';
         const photo = localStorage.getItem('onboarding_photo') || '';
         const lang = localStorage.getItem('settings_chat_lang') || 'en';
-        
-        sha256(password).then(hashed => {
-          setDoc(doc(db, 'users', cleanUid), {
-            id: cleanUid,
-            password: hashed,
-            name,
-            age,
-            photo,
-            language: lang,
-            isPlaceholder: false
-          });
-        });
-      }
-    });
 
-    // 2. Real-time Contacts synchronization
-    const contactsQuery = collection(db, 'users', cleanUid, 'contacts');
-    const unsubscribeContacts = onSnapshot(contactsQuery, (snapshot) => {
-      const contactIds = snapshot.docs.map(doc => doc.id);
-      
-      if (contactIds.length === 0) {
-        setContacts([]);
-        return;
-      }
-
-      const activeListeners = [];
-      const tempContactsData = {};
-
-      const updateContactState = () => {
-        const list = contactIds.map(cId => tempContactsData[cId]).filter(Boolean);
-        setContacts(list);
-        localStorage.setItem('smart_messenger_contacts_backup', JSON.stringify(list.map(c => c.id)));
-      };
-
-      contactIds.forEach(cId => {
-        const escCId = cId;
-        const roomKey = [cleanUid, escCId].sort().join('_');
-
-        // Listen to contact's user profile changes (name, photo, online status)
-        const unsubContactProfile = onSnapshot(doc(db, 'users', escCId), (contactSnap) => {
-          if (contactSnap.exists()) {
-            const cData = contactSnap.data();
-            const existing = tempContactsData[cId] || {};
-            
-            tempContactsData[cId] = {
-              id: cId,
-              name: cData.name || cId,
-              age: cData.age || '',
-              photo: cData.photo || '',
-              language: cData.language || 'en',
-              snippet: existing.snippet || 'No messages yet',
-              time: existing.time || '',
-              badge: 'Chat',
-              online: !!cData.online
-            };
-            updateContactState();
-          }
-        });
-        activeListeners.push(unsubContactProfile);
-
-        // Listen to last message in the room for snippets
-        const lastMsgQuery = query(
-          collection(db, 'chats', roomKey, 'messages'),
-          orderBy('timestamp', 'desc'),
-          limit(1)
-        );
-        const unsubLastMsg = onSnapshot(lastMsgQuery, (msgSnap) => {
-          const existing = tempContactsData[cId] || {
-            id: cId,
-            name: cId,
-            age: '',
-            photo: '',
-            language: 'en',
-            online: false,
-            badge: 'Chat'
-          };
-          
-          if (!msgSnap.empty) {
-            const msg = msgSnap.docs[0].data();
-            existing.snippet = msg.image ? '[Image]' : msg.translation || msg.original || '';
-            existing.time = msg.time || '';
-          } else {
-            existing.snippet = 'No messages yet';
-            existing.time = '';
-          }
-          tempContactsData[cId] = existing;
-          updateContactState();
-        });
-        activeListeners.push(unsubLastMsg);
+        fetch(`${API_BASE_URL}/api/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: cleanUid, password, name, age, photo, language: lang })
+        }).catch(err => console.error("Auto registration failed:", err));
       });
 
-      return () => {
-        activeListeners.forEach(unsub => unsub());
-      };
-    });
+    // 2. Fetch and Sync Contacts list
+    const syncContacts = () => {
+      fetch(`${API_BASE_URL}/api/contacts/${cleanUid}`)
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) {
+            setContacts(data);
+            localStorage.setItem('smart_messenger_contacts_backup', JSON.stringify(data));
+          }
+        })
+        .catch(err => console.error("Error syncing contacts:", err));
+    };
 
-    // Mark online
-    updateDoc(doc(db, 'users', cleanUid), { online: true }).catch(() => {});
+    // Load from local backup immediately for instant render
+    const savedContacts = localStorage.getItem('smart_messenger_contacts_backup');
+    if (savedContacts) {
+      try {
+        setContacts(JSON.parse(savedContacts));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    syncContacts();
+
+    // 3. Listen to Socket Events
+    const handleSocketEvent = (event, data) => {
+      if (event === 'user_status_change') {
+        setContacts(prev => prev.map(c => {
+          if (c.id.toLowerCase() === data.userId.toLowerCase()) {
+            return { ...c, online: data.online };
+          }
+          return c;
+        }));
+      } else if (event === 'receive_msg') {
+        // Real-time update for contact snippet on dashboard when a message arrives
+        const sender = data.senderId ? data.senderId.toLowerCase() : '';
+        if (sender) {
+          setContacts(prev => prev.map(c => {
+            if (c.id.toLowerCase() === sender) {
+              return {
+                ...c,
+                snippet: data.image ? '[Image]' : data.translation || data.original,
+                time: data.time || ''
+              };
+            }
+            return c;
+          }));
+
+          // Also save background incoming message to localStorage so it is preserved offline
+          const localRoomKey = `chat_history_${cleanUid}_${sender}`;
+          const saved = localStorage.getItem(localRoomKey);
+          let list = [];
+          if (saved) {
+            try { list = JSON.parse(saved); } catch(e){}
+          }
+          if (!list.some(m => m.id === data.id)) {
+            list.push({
+              id: data.id,
+              sender: 'incoming',
+              translation: data.translation,
+              original: data.original,
+              image: data.image || '',
+              time: data.time
+            });
+            localStorage.setItem(localRoomKey, JSON.stringify(list));
+          }
+        }
+      }
+    };
+
+    socketListeners.add(handleSocketEvent);
 
     return () => {
-      unsubscribeProfile();
-      unsubscribeContacts();
-      updateDoc(doc(db, 'users', cleanUid), { online: false }).catch(() => {});
+      socketListeners.delete(handleSocketEvent);
     };
   }, [userId]);
 
@@ -1966,21 +1970,31 @@ function Dashboard() {
       const uId = userId.toLowerCase();
       const cId = contactIdClean;
       
-      const contactUserRef = doc(db, 'users', cId);
-      const contactUserSnap = await getDoc(contactUserRef);
-      if (!contactUserSnap.exists()) {
-        await setDoc(contactUserRef, {
-          id: cId,
-          name: cId.split('@')[0],
-          age: '',
-          photo: '',
-          language: 'en',
-          isPlaceholder: true
-        });
+      const res = await fetch(`${API_BASE_URL}/api/contacts/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: uId, contactId: cId })
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to add contact on server.");
       }
 
-      await setDoc(doc(db, 'users', uId, 'contacts', cId), { addedAt: Date.now() });
-      await setDoc(doc(db, 'users', cId, 'contacts', uId), { addedAt: Date.now() });
+      const resData = await res.json();
+      
+      if (resData.contact) {
+        setContacts(prev => {
+          const next = [...prev.filter(c => c.id !== cId), {
+            ...resData.contact,
+            snippet: 'No messages yet',
+            time: '',
+            badge: 'Chat',
+            online: false
+          }];
+          localStorage.setItem('smart_messenger_contacts_backup', JSON.stringify(next));
+          return next;
+        });
+      }
 
       globalShowToast("Contact Added", `Successfully added ${contactIdClean}!`, "normal");
       setAddContactModalOpen(false);
@@ -2639,7 +2653,11 @@ function ChatDetail() {
     setUserLang(newLang);
     localStorage.setItem('settings_chat_lang', newLang);
     const uId = userId.toLowerCase();
-    updateDoc(doc(db, 'users', uId), { language: newLang }).catch(err => console.error(err));
+    fetch(API_BASE_URL + '/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: uId, language: newLang })
+    }).catch(err => console.error(err));
   };
 
   const handleSendImage = (e) => {
@@ -2661,29 +2679,34 @@ function ChatDetail() {
       
       const uId = userId.toLowerCase();
       const cId = contactId.toLowerCase();
-      const roomKey = [uId, cId].sort().join('_');
 
       const messageObject = {
         id: msgId,
-        senderId: uId,
+        sender: 'outgoing',
         translation: '[Image Shared]',
         original: '[Image Shared]',
         image: base64String,
-        time: timeStr,
-        timestamp: Date.now()
+        time: timeStr
       };
 
-      try {
-        await setDoc(doc(db, 'chats', roomKey, 'messages', msgId), messageObject);
-        await setDoc(doc(db, 'chats', roomKey), {
-          participants: [uId, cId],
-          lastMessage: { text: '[Image Shared]', time: timeStr, senderId: uId },
-          updatedAt: Date.now()
-        }, { merge: true });
-      } catch (err) {
-        console.error("Failed to send image to Firestore:", err);
+      const s = getSocket(userId);
+      if (s) {
+        s.emit('send_msg', {
+          userId: uId,
+          contactId: cId,
+          translation: '[Image Shared]',
+          original: '[Image Shared]',
+          image: base64String,
+          time: timeStr,
+          id: msgId
+        });
       }
-      
+
+      setMessages(prev => {
+        const next = [...prev, messageObject];
+        localStorage.setItem(`chat_history_${uId}_${cId}`, JSON.stringify(next));
+        return next;
+      });
       setTimeout(scrollToBottom, 50);
     };
     reader.readAsDataURL(file);
@@ -2695,38 +2718,67 @@ function ChatDetail() {
       const uId = userId.toLowerCase();
       const cId = contactId.toLowerCase();
       const roomKey = [uId, cId].sort().join('_');
-      deleteDoc(doc(db, 'chats', roomKey, 'messages', msgId)).catch(err => console.error(err));
+
+      fetch(`${API_BASE_URL}/api/message/${roomKey}/${msgId}`, {
+        method: 'DELETE'
+      })
+        .then(() => {
+          setMessages(prev => {
+            const next = prev.filter(m => m.id !== msgId);
+            localStorage.setItem(`chat_history_${uId}_${cId}`, JSON.stringify(next));
+            return next;
+          });
+        })
+        .catch(err => console.error(err));
     }
   };
 
   // Fetch contact user details
   useEffect(() => {
-    if (!contactId) return;
+    if (!contactId || !userId) return;
     const cleanCId = contactId.toLowerCase();
     
-    const unsub = onSnapshot(doc(db, 'users', cleanCId), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
+    // Fetch profile from backend
+    fetch(`${API_BASE_URL}/api/users/${cleanCId}`)
+      .then(res => res.json())
+      .then(data => {
         setContactUser({
           id: cleanCId,
           name: data.name || cleanCId,
-          photo: data.photo || '',
-          language: data.language || 'en'
+          photo: data.photo || data.profilePic || '',
+          language: data.language || data.preferredChatLanguage || 'en'
         });
-        if (data.language) {
-          setPartnerLang(data.language);
-        }
-        setIsPartnerOnline(!!data.online);
-      } else {
+        setPartnerLang(data.language || data.preferredChatLanguage || 'en');
+      })
+      .catch(() => {
         setContactUser({ id: cleanCId, name: cleanCId, photo: '', language: 'en' });
-        setIsPartnerOnline(false);
+      });
+
+    // Check status via socket
+    const s = getSocket(userId);
+    if (s) {
+      s.emit('check_partner_status', { contactId: cleanCId });
+    }
+
+    // Listen to partner status changes via socket
+    const handleSocketEvent = (event, data) => {
+      if (event === 'partner_status') {
+        if (data.contactId.toLowerCase() === cleanCId) {
+          setIsPartnerOnline(!!data.online);
+        }
+      } else if (event === 'user_status_change') {
+        if (data.userId.toLowerCase() === cleanCId) {
+          setIsPartnerOnline(!!data.online);
+        }
       }
-    });
+    };
+    socketListeners.add(handleSocketEvent);
+    return () => {
+      socketListeners.delete(handleSocketEvent);
+    };
+  }, [contactId, userId]);
 
-    return () => unsub();
-  }, [contactId]);
-
-  // Set up Firestore subcollection listener & fetch past history
+  // Set up socket listeners & fetch past history from backend
   useEffect(() => {
     if (!userId || localStorage.getItem('smart_messenger_logged_in') !== 'true') {
       navigate('/');
@@ -2735,7 +2787,6 @@ function ChatDetail() {
 
     const uId = userId.toLowerCase();
     const cId = contactId.toLowerCase();
-    const roomKey = [uId, cId].sort().join('_');
 
     // Load local history from localStorage immediately
     const savedLocalMsgsStr = localStorage.getItem(`chat_history_${uId}_${cId}`);
@@ -2752,54 +2803,78 @@ function ChatDetail() {
       setTimeout(scrollToBottom, 50);
     }
 
-    // Subscribe to real-time message collection in Firestore
-    const messagesQuery = query(
-      collection(db, 'chats', roomKey, 'messages'),
-      orderBy('timestamp', 'asc')
-    );
-
-    const unsubscribeMessages = onSnapshot(messagesQuery, async (snapshot) => {
-      const myLang = localStorage.getItem('settings_chat_lang') || localStorage.getItem('settings_ui_lang') || 'en';
-      
-      const list = await Promise.all(snapshot.docs.map(async (doc) => {
-        const m = doc.data();
-        const isIncoming = m.senderId !== uId;
+    // Sync latest messages from the server
+    fetch(`${API_BASE_URL}/api/messages/${uId}/${cId}`)
+      .then(res => res.json())
+      .then(async (serverMsgs) => {
+        const myLang = localStorage.getItem('settings_chat_lang') || localStorage.getItem('settings_ui_lang') || 'en';
         
-        let displayTranslation = m.translation;
-        if (isIncoming && m.original && m.original !== '[Image Shared]' && !m.image) {
-          try {
-            displayTranslation = await translateText(m.original, 'auto', myLang);
-          } catch {
-            displayTranslation = m.translation || m.original;
+        const list = await Promise.all(serverMsgs.map(async (m) => {
+          const isIncoming = m.sender === 'incoming';
+          let displayTranslation = m.translation || m.original;
+
+          if (isIncoming && m.original && m.original !== '[Image Shared]' && !m.image) {
+            // Find if we already translated it locally to speed up rendering
+            const localMatch = localMsgs.find(lm => lm.id === m.id);
+            if (localMatch && localMatch.translation) {
+              displayTranslation = localMatch.translation;
+            } else {
+              try {
+                displayTranslation = await translateText(m.original, 'auto', myLang);
+              } catch {
+                displayTranslation = m.translation || m.original;
+              }
+            }
           }
+          return {
+            id: m.id,
+            sender: m.sender,
+            translation: displayTranslation,
+            original: m.original,
+            image: m.image || '',
+            time: m.time
+          };
+        }));
+
+        setMessages(list);
+        localStorage.setItem(`chat_history_${uId}_${cId}`, JSON.stringify(list));
+        setTimeout(scrollToBottom, 100);
+      })
+      .catch(err => console.error("Error fetching messages:", err));
+
+    // Join room in Socket
+    const s = getSocket(userId);
+    if (s) {
+      s.emit('join_chat', { userId: uId, contactId: cId });
+    }
+
+    // Listen to real-time incoming messages in this chat
+    const handleSocketEvent = (event, data) => {
+      if (event === 'receive_msg') {
+        const isFromPartner = !data.senderId || data.senderId.toLowerCase() === cId;
+        if (isFromPartner) {
+          const incomingMsg = {
+            id: data.id,
+            sender: 'incoming',
+            translation: data.translation,
+            original: data.original,
+            image: data.image || '',
+            time: data.time
+          };
+
+          setMessages(prev => {
+            if (prev.some(m => m.id === incomingMsg.id)) return prev;
+            const next = [...prev, incomingMsg];
+            localStorage.setItem(`chat_history_${uId}_${cId}`, JSON.stringify(next));
+            return next;
+          });
+          setTimeout(scrollToBottom, 50);
         }
-
-        return {
-          id: m.id,
-          sender: isIncoming ? 'incoming' : 'outgoing',
-          translation: displayTranslation,
-          original: m.original,
-          image: m.image || '',
-          time: m.time,
-          timestamp: m.timestamp
-        };
-      }));
-
-      setMessages(list);
-      localStorage.setItem(`chat_history_${uId}_${cId}`, JSON.stringify(list));
-      setTimeout(scrollToBottom, 100);
-    });
-
-    // Subscribe to partner's status changes
-    const unsubscribePartner = onSnapshot(doc(db, 'users', cId), (docSnap) => {
-      if (docSnap.exists()) {
-        setIsPartnerOnline(!!docSnap.data().online);
       }
-    });
-
+    };
+    socketListeners.add(handleSocketEvent);
     return () => {
-      unsubscribeMessages();
-      unsubscribePartner();
+      socketListeners.delete(handleSocketEvent);
     };
   }, [userId, contactId]);
 
@@ -2823,28 +2898,33 @@ function ChatDetail() {
     
     const uId = userId.toLowerCase();
     const cId = contactId.toLowerCase();
-    const roomKey = [uId, cId].sort().join('_');
 
     const messageObject = {
       id: msgId,
-      senderId: uId,
+      sender: 'outgoing',
       translation: textClean,
       original: textClean,
-      time: timeStr,
-      timestamp: Date.now()
+      time: timeStr
     };
 
-    try {
-      await setDoc(doc(db, 'chats', roomKey, 'messages', msgId), messageObject);
-      await setDoc(doc(db, 'chats', roomKey), {
-        participants: [uId, cId],
-        lastMessage: { text: textClean, time: timeStr, senderId: uId },
-        updatedAt: Date.now()
-      }, { merge: true });
-    } catch (err) {
-      console.error("Error sending message:", err);
+    const s = getSocket(userId);
+    if (s) {
+      s.emit('send_msg', {
+        userId: uId,
+        contactId: cId,
+        translation: textClean,
+        original: textClean,
+        image: '',
+        time: timeStr,
+        id: msgId
+      });
     }
 
+    setMessages(prev => {
+      const next = [...prev, messageObject];
+      localStorage.setItem(`chat_history_${uId}_${cId}`, JSON.stringify(next));
+      return next;
+    });
     setTimeout(scrollToBottom, 50);
   };
 
@@ -2852,17 +2932,11 @@ function ChatDetail() {
     if (confirm("Are you sure you want to clear chat history for this contact?")) {
       const uId = userId.toLowerCase();
       const cId = contactId.toLowerCase();
-      const roomKey = [uId, cId].sort().join('_');
 
       try {
-        const qSnap = await getDocs(collection(db, 'chats', roomKey, 'messages'));
-        const deletePromises = qSnap.docs.map(doc => deleteDoc(doc.ref));
-        await Promise.all(deletePromises);
-
-        await setDoc(doc(db, 'chats', roomKey), {
-          lastMessage: null,
-          updatedAt: Date.now()
-        }, { merge: true });
+        await fetch(`${API_BASE_URL}/api/messages/${uId}/${cId}`, {
+          method: 'DELETE'
+        });
 
         setMessages([]);
         localStorage.removeItem(`chat_history_${uId}_${cId}`);
